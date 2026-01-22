@@ -37,6 +37,7 @@ python src/run_feature_extraction.py \
 *   `--extract_attention`: Flag. If present, attention maps will also be saved. **Note:** This consumes a lot of storage.
 *   `--preprocessing_mode`: Preprocessing strategy (default: `imagenet_style`).
 *   `--jpeg_aug_real` / `--jpeg_aug_fake`: Apply JPEG compression augmentation to input images (0 for off, 1 for on).
+*   `--mean_pooling_only`: Flag. If present, applies spatial mean pooling to reduce feature tensor size from `[1, seq_len, dim]` to `[1, dim]`. This significantly reduces disk space usage while preserving the main feature representation.
 
 ### `src/extract_features.py`
 
@@ -66,3 +67,11 @@ output_path/
 ```
 
 The features are typically saved as PyTorch tensors (`.pt` files).
+
+## Feature Tensor Shapes
+
+By default, feature tensors have shape `[1, seq_len, dim]` where:
+- `seq_len` is the sequence length (e.g., 1024 for 512x512 images)
+- `dim` is the hidden dimension (e.g., 1536 for SD3.5)
+
+With `--mean_pooling_only`, features are reduced to `[1, dim]` by averaging over the spatial dimension. This reduces disk usage by approximately 1000x while retaining the global feature representation.

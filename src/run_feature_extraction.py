@@ -97,6 +97,12 @@ def parse_args():
         default=0,
         help="Enable JPEG augmentation for fake images (0 or 1)",
     )
+    parser.add_argument(
+        "--mean_pooling_only",
+        action="store_true",
+        default=False,
+        help="Apply spatial mean pooling to reduce feature size from [1, seq_len, dim] to [1, dim]",
+    )
     return parser.parse_args()
 
 
@@ -140,6 +146,7 @@ def main():
         apply_mean=args.apply_mean,
         preprocessing_mode=args.preprocessing_mode,
         jpeg_aug=bool(args.jpeg_aug_real),
+        mean_pooling_only=args.mean_pooling_only,
         device=device,
         dtype=dtype,
     )
@@ -163,6 +170,7 @@ def main():
         apply_mean=args.apply_mean,
         preprocessing_mode=args.preprocessing_mode,
         jpeg_aug=bool(args.jpeg_aug_fake),
+        mean_pooling_only=args.mean_pooling_only,
         device=device,
         dtype=dtype,
     )

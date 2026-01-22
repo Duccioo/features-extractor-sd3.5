@@ -58,6 +58,7 @@ python src/run_feature_extraction.py \
 -   `--extract_attention`: Optional. Add this flag to extract attention maps (WARNING: uses significant disk space).
 -   `--image_size`: Resolution to resize images (default: 512).
 -   `--num_images`: Limit the number of images to process (-1 for all).
+-   `--mean_pooling_only`: Optional. Apply spatial mean pooling to reduce feature size from `[1, seq_len, dim]` to `[1, dim]`, significantly reducing disk space usage.
 
 ### Other Tools
 
