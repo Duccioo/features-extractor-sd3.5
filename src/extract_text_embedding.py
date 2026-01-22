@@ -93,9 +93,16 @@ class SD3TextEmbeddingExtractor:
             "y": y,  # [1, 2048]
         }
 
-    def extract_embeddings(self, prompts: list) -> dict:
+    def extract_embeddings(
+        self, prompts: list, mean_pooling_only: bool = False
+    ) -> dict:
         """
         Extract embeddings for multiple prompts.
+
+        Args:
+            prompts: List of prompt strings
+            mean_pooling_only: If True, averages the sequence embedding over the sequence dimension.
+                               Reduces 'c_crossattn' from [1, 154, 4096] to [1, 4096].
 
         Returns a dict with structure:
         {
@@ -115,6 +122,19 @@ class SD3TextEmbeddingExtractor:
                 print(f"  Encoding: {repr(prompt)}")
 
             emb = self.get_embedding(prompt)
+
+            if mean_pooling_only:
+                if self.verbose:
+                    print(
+                        f"    Pooling c_crossattn: {emb['c_crossattn'].shape} -> ",
+                        end="",
+                    )
+                # Average pooling over sequence dimension (dim 1)
+                # [1, 154, 4096] -> [1, 4096]
+                emb["c_crossattn"] = emb["c_crossattn"].mean(dim=1)
+                if self.verbose:
+                    print(f"{emb['c_crossattn'].shape}")
+
             embeddings[prompt] = emb
 
             if self.verbose:
@@ -164,9 +184,17 @@ def load_text_embeddings(
         raise KeyError(f"Prompt {repr(prompt)} not found. Available: {available}")
 
     emb = data["embeddings"][prompt]
+    c_crossattn = emb["c_crossattn"].to(device=device, dtype=dtype)
+    y = emb["y"].to(device=device, dtype=dtype)
+
+    # If mean_pooling_only was used, c_crossattn might be 2D [B, Dim].
+    # SD3 expects 3D [B, Seq, Dim], so we unsqueeze to [B, 1, Dim].
+    if c_crossattn.dim() == 2:
+        c_crossattn = c_crossattn.unsqueeze(1)
+
     return {
-        "c_crossattn": emb["c_crossattn"].to(device=device, dtype=dtype),
-        "y": emb["y"].to(device=device, dtype=dtype),
+        "c_crossattn": c_crossattn,
+        "y": y,
     }
 
 
@@ -210,6 +238,11 @@ def main():
         action="store_true",
         help="Suppress verbose output",
     )
+    parser.add_argument(
+        "--mean_pooling_only",
+        action="store_true",
+        help="Reduce feature size by averaging over sequence dimension",
+    )
 
     args = parser.parse_args()
 
@@ -231,7 +264,9 @@ def main():
     )
 
     print(f"\nExtracting embeddings for {len(args.prompts)} prompts...")
-    result = extractor.extract_embeddings(args.prompts)
+    result = extractor.extract_embeddings(
+        args.prompts, mean_pooling_only=args.mean_pooling_only
+    )
 
     # Save to file
     torch.save(result, args.output)

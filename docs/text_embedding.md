@@ -31,6 +31,17 @@ python src/extract_text_embedding.py \
     --prompts "a photo of a cat" "scenery"
 ```
 
+### Reduced Feature Size (Mean Pooling)
+
+To save disk space, you can average the sequence embedding over the sequence dimension (154 tokens) using `--mean_pooling_only`. This reduces the `c_crossattn` tensor from `[1, 154, 4096]` to `[1, 4096]`.
+
+```bash
+python src/extract_text_embedding.py \
+    --model_path models/sd3.5_large.safetensors \
+    --output text_embeddings_pooled.pt \
+    --mean_pooling_only
+```
+
 ## How It Works
 
 1.  **Loads SD3Inferencer**: It initializes the Stable Diffusion 3.5 inference pipeline, which loads the text encoders (CLIP-L/G, T5).
