@@ -17,10 +17,12 @@ This repository depends on the official Stable Diffusion 3.5 implementation. You
     **Note:** The scripts expect the `sd3.5` folder to be located in the root directory of this project (alongside `src`, `LICENSE`, etc.).
 
 ### 2. Install Dependencies
-Install the required Python libraries:
+- Install the required Python libraries:
 ```bash
-pip install torch torchvision pillow tqdm huggingface_hub python-dotenv
+pip install -r requirements.txt
 ```
+
+- then install [pytorch](https://pytorch.org/get-started/locally/)
 
 ## Setup & Models
 
