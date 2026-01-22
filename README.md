@@ -1,12 +1,27 @@
-# Features Extractor for Stable Diffusion 3.5
+<div align="center">
 
-This repository contains tools and scripts to extract internal features (hidden states and attention maps) from Stable Diffusion 3.5 models. It is designed to facilitate analysis and experiments involving real and generated images.
+![Features Extractor Cover](assets/immagine_copertina.png)
 
-## Prerequisites
+# 🎨 Features Extractor for Stable Diffusion 3.5
+
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Stable Diffusion 3.5](https://img.shields.io/badge/SD-3.5-purple.svg?logo=stability-ai&logoColor=white)](https://stability.ai/)
+
+*🔬 Extract internal features (hidden states and attention maps) from Stable Diffusion 3.5 models for analysis and research.*
+
+</div>
+
+---
+
+This repository contains tools and scripts to extract internal features from Stable Diffusion 3.5 models. It is designed to facilitate analysis and experiments involving real and generated images.
+
+## 📋 Prerequisites
 
 Before using this code, you must set up the environment and download the necessary dependencies.
 
-### 1. Download Stable Diffusion 3.5 Code
+### 1️⃣ Download Stable Diffusion 3.5 Code
 This repository depends on the official Stable Diffusion 3.5 implementation. You must download the code from Stability AI.
 
 1.  Go to the root of this repository.
@@ -16,7 +31,7 @@ This repository depends on the official Stable Diffusion 3.5 implementation. You
     ```
     **Note:** The scripts expect the `sd3.5` folder to be located in the root directory of this project (alongside `src`, `LICENSE`, etc.).
 
-### 2. Install Dependencies
+### 2️⃣ Install Dependencies
 - Install the required Python libraries:
 ```bash
 pip install -r requirements.txt
@@ -24,9 +39,9 @@ pip install -r requirements.txt
 
 - then install [pytorch](https://pytorch.org/get-started/locally/)
 
-## Setup & Models
+## ⚙️ Setup & Models
 
-### Download Models
+### 📥 Download Models
 You need to download the Stable Diffusion 3.5 model weights (e.g., `sd3.5_large.safetensors`). A helper script is provided in the `src/download` folder.
 
 Run the download script:
@@ -35,9 +50,9 @@ python src/download/download_models.py
 ```
 *Note: This script uses Hugging Face. You may need to set up your Hugging Face token if the models require authentication.*
 
-## Usage
+## 🚀 Usage
 
-### Feature Extraction
+### 🔍 Feature Extraction
 The main entry point for extracting features is `src/run_feature_extraction.py`. This script processes two directories of images (Real and Fake) and extracts features for analysis.
 
 **Basic Usage:**
@@ -50,7 +65,7 @@ python src/run_feature_extraction.py \
     --output_path output_features
 ```
 
-**Key Arguments:**
+**🔧 Key Arguments:**
 -   `--model_path`: Path to the downloaded model checkpoint (`.safetensors`).
 -   `--real_images_path`: Folder containing the real images.
 -   `--fake_images_path`: Folder containing the fake/generated images.
@@ -60,21 +75,21 @@ python src/run_feature_extraction.py \
 -   `--num_images`: Limit the number of images to process (-1 for all).
 -   `--mean_pooling_only`: Optional. Apply spatial mean pooling to reduce feature size from `[1, seq_len, dim]` to `[1, dim]`, significantly reducing disk space usage.
 
-### Other Tools
+### 🛠️ Other Tools
 
-#### Extract Text Embeddings
+#### 📝 Extract Text Embeddings
 You can pre-compute text embeddings for use in conditioning:
 ```bash
 python src/extract_text_embedding.py --model_path models/sd3.5_large.safetensors --output text_embeddings.pt
 ```
 
-#### Download Datasets
+#### 📦 Download Datasets
 The `src/download/` folder contains scripts to help you download various datasets used for training or testing, such as:
 -   `download_genimage.py`
 -   `download_echodataset.py`
 -   `download_tiny_genimage.py`
 
-## Documentation
+## 📚 Documentation
 
 For more detailed information on how the scripts work, please refer to the `docs/` folder:
 
