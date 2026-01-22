@@ -1,0 +1,413 @@
+"""
+SD3.5 Feature Extraction Library
+
+Extracts internal features (hidden states and attention) from Stable Diffusion 3.5.
+Exposes 'extract_features' function for folder processing.
+"""
+
+import os
+import sys
+import torch
+from PIL import Image
+from tqdm import tqdm
+from glob import glob
+
+
+# ---
+# Load precomputed text embeddings when provided
+from extract_text_embedding import load_text_embeddings
+
+# Add the sd3.5 directory to the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sd3.5"))
+
+from sd3_impls import SD3LatentFormat, ModelSamplingDiscreteFlow
+from utils.model import load_sd35_model, validate_model_loading
+from utils.features import create_dual_feature_hook, AttentionCapture
+from utils.conditioning import create_empty_conditioning
+from utils.preprocessing import StandardPreprocessor
+
+
+# Default attention layers to save (if not specified)
+# SD3.5 has 38 joint blocks (layers 0-37)
+ATTENTION_LAYERS_TO_SAVE = [0, 1, 2, 12, 23, 35, 36, 37]
+
+
+def setup_output_directories_for_category(
+    output_path, category, extract_attention=False
+):
+    """Create output directory structure for features specific to a category."""
+    os.makedirs(output_path, exist_ok=True)
+
+    # Hidden features (x) - image branch
+    os.makedirs(os.path.join(output_path, "hidden_x", category), exist_ok=True)
+    # Hidden features (context) - text branch
+    os.makedirs(os.path.join(output_path, "hidden_context", category), exist_ok=True)
+    # Attention weights
+    if extract_attention:
+        os.makedirs(os.path.join(output_path, "attention", category), exist_ok=True)
+
+
+def collect_images(images_path, num_images=-1):
+    """Collect all image files from a directory."""
+    extensions = ["*.png", "*.PNG", "*.jpg", "*.JPG", "*.jpeg", "*.JPEG"]
+    images = []
+    for ext in extensions:
+        images.extend(glob(os.path.join(images_path, ext)))
+
+    if num_images > 0:
+        images = sorted(images)[:num_images]
+    return images
+
+
+def extract_features_from_image(
+    image_path,
+    model,
+    vae,
+    transform,
+    sigma,
+    device,
+    dtype,
+    features_x,
+    features_context,
+    timestep=0,
+    extract_attention=False,
+    conditioning=None,
+):
+    """Extract features from a single image."""
+    features_x.clear()
+    features_context.clear()
+
+    image = Image.open(image_path).convert("RGB")
+    image_tensor = transform(image).unsqueeze(0).to(device, dtype)
+
+    attention_weights = {}
+
+    with torch.no_grad():
+        latents = vae.encode(image_tensor)
+        latents = SD3LatentFormat().process_in(latents)
+
+        if timestep > 0:
+            noise = torch.randn_like(latents)
+            noised_latents = sigma * noise + (1.0 - sigma) * latents
+        else:
+            noised_latents = latents
+
+        batch_size = noised_latents.shape[0]
+        if conditioning is not None:
+            cond_context, cond_y = conditioning
+            context = cond_context.to(device=device, dtype=dtype)
+            y = cond_y.to(device=device, dtype=dtype)
+            if context.shape[0] == 1 and batch_size > 1:
+                context = context.expand(batch_size, *context.shape[1:])
+            if y.shape[0] == 1 and batch_size > 1:
+                y = y.expand(batch_size, *y.shape[1:])
+        else:
+            context, y = create_empty_conditioning(
+                batch_size, device, dtype, model=model
+            )
+
+        _ = model.apply_model(
+            noised_latents,
+            sigma.expand(batch_size),
+            c_crossattn=context,
+            y=y,
+        )
+
+        if extract_attention:
+            with AttentionCapture(model) as attn_capture:
+                _ = model.apply_model(
+                    noised_latents,
+                    sigma.expand(batch_size),
+                    c_crossattn=context,
+                    y=y,
+                )
+                attention_weights.update(attn_capture.attention_weights)
+
+    return attention_weights
+
+
+def aggregate_layer_features(features_dict, mean_pooling_only=False):
+    """Aggregate layer features: keep first, last, and average of all layers.
+
+    Args:
+        features_dict: Dictionary of layer_name -> tensor.
+        mean_pooling_only: If True, apply spatial mean pooling to reduce tensor size.
+                          Reduces [1, seq_len, dim] to [1, dim].
+    """
+    if not features_dict:
+        return {}
+
+    sorted_keys = sorted(features_dict.keys(), key=lambda x: int(x.split("_")[1]))
+    num_layers = len(sorted_keys)
+
+    if num_layers == 0:
+        return {}
+
+    def apply_pooling(tensor):
+        """Apply spatial mean pooling if enabled."""
+        if mean_pooling_only and tensor.dim() == 3:
+            # [batch, seq_len, dim] -> [batch, dim]
+            return tensor.mean(dim=1)
+        return tensor
+
+    aggregated = {}
+    aggregated["first"] = apply_pooling(features_dict[sorted_keys[0]])
+    if num_layers >= 2:
+        aggregated["last"] = apply_pooling(features_dict[sorted_keys[-1]])
+
+    all_tensors = [features_dict[k] for k in sorted_keys]
+    stacked = torch.stack(all_tensors, dim=0)
+    aggregated["middle_avg"] = apply_pooling(stacked.mean(dim=0))
+
+    return aggregated
+
+
+def aggregate_attention_features(
+    attention_dict, layers_to_save=None, mean_pooling_only=False
+):
+    """Aggregate attention features.
+
+    Args:
+        attention_dict: Dictionary of attention weights.
+        layers_to_save: List of layer indices to save.
+        mean_pooling_only: If True, apply mean pooling to reduce tensor size.
+    """
+    if not attention_dict:
+        return {}
+
+    joint_keys = sorted(
+        [k for k in attention_dict if k.endswith("_joint")],
+        key=lambda x: int(x.split("_")[1]),
+    )
+    self_keys = sorted(
+        [k for k in attention_dict if k.endswith("_self")],
+        key=lambda x: int(x.split("_")[1]),
+    )
+
+    aggregated = {}
+
+    def apply_pooling(tensor):
+        """Apply mean pooling if enabled. For attention [batch, heads, seq, seq] -> [batch, heads]."""
+        if mean_pooling_only and tensor.dim() >= 3:
+            # Average over spatial dimensions
+            while tensor.dim() > 2:
+                tensor = tensor.mean(dim=-1)
+        return tensor
+
+    def aggregate_attention_type(keys, attn_type):
+        if not keys:
+            return
+
+        selected_keys = keys
+        if layers_to_save is not None:
+            wanted = set(layers_to_save)
+            selected_keys = [k for k in keys if int(k.split("_")[1]) in wanted]
+
+        for key in selected_keys:
+            layer_num = key.split("_")[1]
+            aggregated[f"layer_{layer_num}_{attn_type}"] = apply_pooling(
+                attention_dict[key]
+            )
+
+        if len(keys) > 1:
+            all_tensors = [attention_dict[k] for k in keys]
+            stacked = torch.stack(all_tensors, dim=0)
+            aggregated[f"middle_avg_{attn_type}"] = apply_pooling(stacked.mean(dim=0))
+
+    aggregate_attention_type(joint_keys, "joint")
+    aggregate_attention_type(self_keys, "self")
+
+    return aggregated
+
+
+def save_features(features_dict, output_path, feature_type, category, image_name):
+    """Save extracted features to disk."""
+    for name, tensor in features_dict.items():
+        save_path = os.path.join(
+            output_path, feature_type, category, f"{image_name}_{name}.pt"
+        )
+        torch.save(tensor, save_path)
+
+
+def extract_features(
+    images_dir,
+    output_dir,
+    category="data",
+    model=None,
+    vae=None,
+    model_path=None,
+    timestep=0,
+    layers_to_save=ATTENTION_LAYERS_TO_SAVE,
+    extract_attention=False,
+    num_images=-1,
+    image_size=512,
+    simulate_low_res=False,
+    text_embedding_path=None,
+    text_embedding_prompt="",
+    apply_mean=True,
+    preprocessing_mode="genimage_resize",
+    jpeg_aug=True,
+    mean_pooling_only=False,
+    device=None,
+    dtype=torch.float16,
+):
+    """
+    Extract features from all images in a folder.
+
+    Args:
+        images_dir: Input folder with images.
+        output_dir: Base folder for output.
+        category: Category name (e.g. "real", "fake") used for output subfolder.
+        model: Loaded SD3.5 model. If None, loaded from model_path.
+        vae: Loaded VAE.
+        model_path: Path to model checkpoint if model not provided.
+        timestep: Diffusion timestep (0-1000).
+        layers_to_save: List of attention layers to save.
+        extract_attention: Boolean to extract attention weights.
+        num_images: Max images to process.
+        image_size: Target image size.
+        simulate_low_res: Whether to simulate low res.
+        text_embedding_path: Path to text embeddings.
+        text_embedding_prompt: Prompt key.
+        apply_mean: Whether to compute/save aggregated mean features.
+        preprocessing_mode: Mode for processing ('imagenet_style', 'brutal_resize', etc).
+        jpeg_aug: Whether to apply JPEG augmentation/compression.
+        mean_pooling_only: If True, apply spatial mean pooling to features before saving.
+                          This reduces [1, seq_len, dim] to [1, dim], saving disk space.
+        device: Torch device.
+        dtype: Torch dtype.
+
+    Returns:
+        Dictionary with statistics (count, shapes).
+    """
+
+    # 1. Setup Device
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # 2. Load Model if needed
+    if model is None or vae is None:
+        if model_path is None:
+            raise ValueError(
+                "Must provide 'model' and 'vae' objects, OR 'model_path' string."
+            )
+        print(f"Loading model from {model_path}...")
+        model, vae = load_sd35_model(
+            model_path, device, dtype, verbose=False
+        )  # verbose=False to avoid noise
+        validate_model_loading(model.diffusion_model, "MM-DiT")
+        validate_model_loading(vae, "VAE")
+
+    # 3. Setup Hooks
+    features_x = {}
+    features_context = {}
+    hooks = []
+
+    # Attach hooks to all blocks
+    for i, block in enumerate(model.diffusion_model.joint_blocks):
+        hook_fn = create_dual_feature_hook(features_x, features_context, f"block_{i}")
+        h = block.register_forward_hook(hook_fn)
+        hooks.append(h)
+
+    stats = {"count": 0, "shapes": None}
+
+    try:
+        # 4. Preparation
+        setup_output_directories_for_category(output_dir, category, extract_attention)
+
+        model_sampling = ModelSamplingDiscreteFlow(shift=3.0)
+
+        if simulate_low_res:
+            print(
+                "WARNING: --simulate_low_res is deprecated. Using standard 'genimage_resize'."
+            )
+
+        preprocessor = StandardPreprocessor(
+            image_size=image_size, mode=preprocessing_mode, jpeg_aug=jpeg_aug
+        )
+        transform = preprocessor.transform
+
+        ts_val = torch.tensor([timestep], device=device, dtype=dtype)
+        sigma = model_sampling.sigma(ts_val)
+
+        conditioning = None
+        if text_embedding_path:
+            cond = load_text_embeddings(
+                text_embedding_path, text_embedding_prompt, device=device, dtype=dtype
+            )
+            conditioning = (cond["c_crossattn"], cond["y"])
+
+        # 5. Collect Images
+        images = collect_images(images_dir, num_images)
+        print(
+            f"Processing {len(images)} images from {images_dir} for category '{category}'..."
+        )
+        stats["count"] = len(images)
+
+        first_image_shapes = None
+
+        # 6. Loop
+        for image_path in tqdm(images, desc=f"Extracting {category}"):
+            attn_weights = extract_features_from_image(
+                image_path,
+                model,
+                vae,
+                transform,
+                sigma,
+                device,
+                dtype,
+                features_x,
+                features_context,
+                timestep,
+                extract_attention,
+                conditioning,
+            )
+
+            # Aggregate
+            agg_x = aggregate_layer_features(
+                features_x, mean_pooling_only=mean_pooling_only
+            )
+            agg_ctx = aggregate_layer_features(
+                features_context, mean_pooling_only=mean_pooling_only
+            )
+
+            # Filter if apply_mean is False
+            if not apply_mean:
+                agg_x.pop("middle_avg", None)
+                agg_ctx.pop("middle_avg", None)
+
+            image_name = os.path.basename(image_path).split(".")[0]
+            save_features(agg_x, output_dir, "hidden_x", category, image_name)
+            save_features(agg_ctx, output_dir, "hidden_context", category, image_name)
+
+            agg_attn = None
+            if extract_attention:
+                agg_attn = aggregate_attention_features(
+                    attn_weights, layers_to_save, mean_pooling_only=mean_pooling_only
+                )
+                if not apply_mean:
+                    # Remove middle_avg keys
+                    agg_attn = {
+                        k: v for k, v in agg_attn.items() if "middle_avg" not in k
+                    }
+                save_features(agg_attn, output_dir, "attention", category, image_name)
+
+            # Capture shapes from first image
+            if first_image_shapes is None:
+                first_image_shapes = {
+                    "hidden_x": {k: list(v.shape) for k, v in agg_x.items()},
+                    "hidden_context": {k: list(v.shape) for k, v in agg_ctx.items()},
+                    "attention": {},
+                }
+                if agg_attn:
+                    first_image_shapes["attention"] = {
+                        k: list(v.shape) for k, v in agg_attn.items()
+                    }
+                stats["shapes"] = first_image_shapes
+
+    finally:
+        # Guarantee hooks are removed so model is clean
+        for h in hooks:
+            h.remove()
+
+    return stats
