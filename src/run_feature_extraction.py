@@ -94,7 +94,7 @@ def parse_args():
     parser.add_argument(
         "--jpeg_aug_fake",
         type=int,
-        default=1,
+        default=0,
         help="Enable JPEG augmentation for fake images (0 or 1)",
     )
     return parser.parse_args()

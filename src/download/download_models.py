@@ -20,13 +20,20 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 try:
-    from huggingface_hub import hf_hub_download, HfFolder
+    from huggingface_hub import hf_hub_download, login
+    import rich
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    import questionary
 except ImportError:
     print(
-        "Errore: manca il pacchetto 'huggingface-hub'. Installalo con: pip install huggingface-hub",
+        "Errore: mancano pacchetti necessari. Installa con: pip install huggingface-hub rich questionary",
         file=sys.stderr,
     )
     sys.exit(1)
+
+console = Console()
 
 # Carica .env se disponibile
 try:
@@ -171,7 +178,79 @@ Esempi:
         action="store_true",
         help="Non eseguire il postprocessing (spostamento/rinomina file)",
     )
+    parser.add_argument(
+        "--interactive", "-i",
+        action="store_true",
+        help="Avvia modalità interattiva (TUI)"
+    )
     return parser.parse_args()
+
+
+def interactive_mode():
+    """Effettua la selezione interattiva."""
+    console.print(Panel.fit("🚀 [bold blue]Stable Diffusion 3.5 Downloader[/bold blue]", border_style="blue"))
+
+    # 1. Token Check
+    token = os.getenv("HUGGINGFACE_TOKEN")
+    if not token:
+        console.print("[yellow]⚠️  Token Hugging Face non trovato nelle variabili d'ambiente.[/yellow]")
+        if questionary.confirm("Vuoi inserire il token ora?").ask():
+           token = questionary.password("Incolla il tuo token Hugging Face:").ask()
+           if token:
+               login(token=token.strip())
+               console.print("[green]✅ Token salvato![/green]")
+           else:
+               console.print("[red]❌ Nessun token inserito. Potresti non riuscire a scaricare modelli protetti.[/red]")
+
+    # 2. Model Selection
+    choices = []
+    for key, config in MODELS.items():
+        choices.append(questionary.Choice(
+            title=f"{config.name} - {config.description}",
+            value=key,
+            checked=(key == "large")
+        ))
+    
+    selected_models = questionary.checkbox(
+        "Seleziona i modelli da scaricare:",
+        choices=choices
+    ).ask()
+
+    if not selected_models:
+        console.print("[red]❌ Nessun modello selezionato.[/red]")
+        sys.exit(1)
+
+    # 3. ControlNets (only if 'large' is selected)
+    selected_controlnets = []
+    if "large" in selected_models:
+        if questionary.confirm("Vuoi scaricare i ControlNet per SD3.5 Large?").ask():
+            cn_choices = [
+                questionary.Choice(title=k, value=k) 
+                for k in CONTROLNETS.keys()
+            ]
+            selected_controlnets = questionary.checkbox(
+                "Seleziona ControlNets:",
+                choices=cn_choices
+            ).ask()
+
+    # 4. Destination Folder
+    dest_folder = questionary.path(
+        "Cartella di destinazione:",
+        default="models",
+        only_directories=True
+    ).ask()
+
+    return argparse.Namespace(
+        model=selected_models,
+        dest=dest_folder,
+        controlnets=selected_controlnets,
+        overwrite=False,
+        skip_encoders=False,
+        only_encoders=False,
+        no_postprocess=False,
+        token=token,
+        list=False 
+    )
 
 
 def list_models() -> None:
@@ -191,11 +270,11 @@ def list_models() -> None:
 def ensure_token(token_arg: Optional[str]) -> None:
     """Configura il token HuggingFace."""
     if token_arg:
-        HfFolder.save_token(token_arg.strip())
+        login(token=token_arg.strip())
         return
     env_token = os.getenv("HUGGINGFACE_TOKEN")
     if env_token:
-        HfFolder.save_token(env_token.strip())
+        login(token=env_token.strip())
         return
 
 
@@ -325,6 +404,11 @@ def main() -> int:
         list_models()
         return 0
     
+    
+    # Se richiesto o se non ci sono argomenti specifici, vai di TUI
+    if args.interactive or (len(sys.argv) == 1):
+        args = interactive_mode()
+
     # Setup
     ensure_token(args.token)
     dest = Path(args.dest).expanduser().resolve()

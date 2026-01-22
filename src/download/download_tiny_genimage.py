@@ -22,6 +22,31 @@ import subprocess
 import zipfile
 from pathlib import Path
 from typing import Optional
+import shutil
+
+# Per download streaming a basso consumo di memoria
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+
+# Carica .env se disponibile
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    # Prova anche dalla directory dello script
+    script_dir_env = Path(__file__).resolve().parent.parent.parent / ".env"
+    if script_dir_env.exists():
+        load_dotenv(script_dir_env)
+except ImportError:
+    pass
 
 # ============================================================================
 # CONFIGURAZIONE
@@ -41,6 +66,18 @@ GENERATORS = [
     "VQDM",
     "BigGAN",
 ]
+
+# Mapping tra nomi display e pattern delle cartelle effettive nel dataset
+# Il dataset Tiny GenImage usa convenzioni di naming diverse
+GENERATOR_FOLDER_PATTERNS = {
+    "Midjourney": ["imagenet_midjourney", "midjourney"],
+    "Stable Diffusion V1.5": ["imagenet_ai_0424_sdv5", "sdv5", "sd_v1.5", "stable_diffusion_v1.5"],
+    "ADM": ["imagenet_ai_0508_adm", "adm"],
+    "GLIDE": ["imagenet_glide", "glide"],
+    "Wukong": ["imagenet_ai_0424_wukong", "wukong"],
+    "VQDM": ["imagenet_ai_0419_vqdm", "vqdm"],
+    "BigGAN": ["imagenet_ai_0419_biggan", "biggan"],
+}
 
 
 def check_kaggle_cli() -> bool:
@@ -73,6 +110,242 @@ def install_kaggle_cli() -> None:
         sys.executable, "-m", "pip", "install", "kaggle", "--quiet"
     ])
     print("✅ kaggle CLI installato!")
+
+
+# ============================================================================
+# FUNZIONI PER DOWNLOAD A BASSO CONSUMO DI MEMORIA
+# ============================================================================
+
+def get_kaggle_api():
+    """Ottiene un'istanza dell'API Kaggle configurata."""
+    try:
+        from kaggle.api.kaggle_api_extended import KaggleApi
+        api = KaggleApi()
+        api.authenticate()
+        return api
+    except Exception as e:
+        print(f"⚠️  Impossibile inizializzare API Kaggle: {e}")
+        return None
+
+
+def download_with_streaming(url: str, output_path: Path, chunk_size: int = 8192) -> bool:
+    """
+    Scarica un file usando streaming per ridurre l'uso di memoria.
+    
+    Args:
+        url: URL del file da scaricare
+        output_path: Path di destinazione
+        chunk_size: Dimensione dei chunk (default 8KB)
+        
+    Returns:
+        True se il download è riuscito
+    """
+    if not HAS_REQUESTS:
+        print("❌ Modulo 'requests' non disponibile. Installa con: pip install requests")
+        return False
+    
+    try:
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if HAS_TQDM and total_size > 0:
+            progress = tqdm(total=total_size, unit='B', unit_scale=True, desc=output_path.name)
+        else:
+            progress = None
+            
+        with open(output_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=chunk_size):
+                if chunk:
+                    f.write(chunk)
+                    if progress:
+                        progress.update(len(chunk))
+        
+        if progress:
+            progress.close()
+            
+        return True
+        
+    except Exception as e:
+        print(f"❌ Errore durante il download: {e}")
+        return False
+
+
+def download_dataset_low_memory(output_dir: Path, chunk_size: int = 8192) -> bool:
+    """
+    Scarica il dataset usando l'API Kaggle Python con streaming a basso consumo di memoria.
+    
+    Questo metodo evita il problema di OOM che si verifica con il CLI standard.
+    
+    Args:
+        output_dir: Directory di destinazione
+        chunk_size: Dimensione dei chunk per lo streaming (default 8KB)
+        
+    Returns:
+        True se il download è riuscito
+    """
+    api = get_kaggle_api()
+    if not api:
+        return False
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = output_dir / "tiny-genimage.zip"
+    
+    print(f"\n📥 Download Tiny GenImage (modalità basso consumo memoria)...")
+    print(f"📁 Destinazione: {output_dir.absolute()}")
+    print(f"📦 Dataset: {KAGGLE_DATASET}")
+    print(f"💾 Dimensione: {DATASET_SIZE}")
+    print(f"🔧 Chunk size: {chunk_size / 1024:.1f} KB\n")
+    
+    try:
+        # Usa download senza unzip per controllare meglio la memoria
+        print("⏳ Scaricamento in corso (questo potrebbe richiedere tempo)...")
+        
+        # L'API Kaggle ha un metodo che scarica direttamente su disco
+        api.dataset_download_files(
+            KAGGLE_DATASET,
+            path=str(output_dir),
+            unzip=False,  # NON estrarre durante il download
+            quiet=False,
+            force=True
+        )
+        
+        print(f"\n✅ Download completato: {zip_path}")
+        return True
+        
+    except MemoryError:
+        print("\n❌ MemoryError durante il download!")
+        print("💡 Prova con --download-parts per scaricare i file singolarmente.")
+        return False
+        
+    except Exception as e:
+        print(f"\n❌ Errore durante il download: {e}")
+        
+        # Se fallisce, prova il metodo alternativo con file singoli
+        if "memory" in str(e).lower():
+            print("💡 Prova con --download-parts per scaricare i file singolarmente.")
+        return False
+
+
+def extract_zip_streaming(zip_path: Path, output_dir: Path, chunk_size: int = 8192) -> bool:
+    """
+    Estrae un file ZIP in streaming per ridurre l'uso di memoria.
+    
+    Args:
+        zip_path: Path del file ZIP
+        output_dir: Directory di destinazione
+        chunk_size: Dimensione dei chunk (default 8KB)
+        
+    Returns:
+        True se l'estrazione è riuscita
+    """
+    if not zip_path.exists():
+        print(f"❌ File non trovato: {zip_path}")
+        return False
+    
+    print(f"\n📦 Estrazione streaming: {zip_path.name}")
+    print(f"📁 Destinazione: {output_dir}")
+    print(f"🔧 Chunk size: {chunk_size / 1024:.1f} KB\n")
+    
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            members = zf.namelist()
+            total = len(members)
+            
+            if HAS_TQDM:
+                iterator = tqdm(members, desc="Estrazione", unit="file")
+            else:
+                iterator = members
+                print(f"⏳ Estrazione di {total} file...")
+            
+            for i, member in enumerate(iterator):
+                # Estrae un file alla volta
+                target_path = output_dir / member
+                
+                if member.endswith('/'):
+                    # È una directory
+                    target_path.mkdir(parents=True, exist_ok=True)
+                else:
+                    # È un file - estrai in streaming
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    with zf.open(member) as source:
+                        with open(target_path, 'wb') as target:
+                            while True:
+                                chunk = source.read(chunk_size)
+                                if not chunk:
+                                    break
+                                target.write(chunk)
+                
+                if not HAS_TQDM and (i + 1) % 1000 == 0:
+                    print(f"   Estratti {i + 1}/{total} file...")
+        
+        print(f"\n✅ Estrazione completata: {output_dir}")
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Errore durante l'estrazione: {e}")
+        return False
+
+
+def download_dataset_by_parts(output_dir: Path) -> bool:
+    """
+    Scarica il dataset file per file invece che tutto insieme.
+    Utile quando la memoria è molto limitata.
+    
+    Args:
+        output_dir: Directory di destinazione
+        
+    Returns:
+        True se almeno alcuni file sono stati scaricati
+    """
+    api = get_kaggle_api()
+    if not api:
+        return False
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"\n📥 Download Tiny GenImage per parti...")
+    print(f"📁 Destinazione: {output_dir.absolute()}")
+    
+    try:
+        # Ottieni la lista dei file nel dataset
+        print("📋 Recupero lista file...")
+        files = api.dataset_list_files(KAGGLE_DATASET).files
+        
+        print(f"📦 Trovati {len(files)} file nel dataset\n")
+        
+        downloaded = 0
+        failed = 0
+        
+        for i, file_info in enumerate(files, 1):
+            filename = file_info.name
+            print(f"[{i}/{len(files)}] {filename}...")
+            
+            try:
+                api.dataset_download_file(
+                    KAGGLE_DATASET,
+                    filename,
+                    path=str(output_dir),
+                    force=True,
+                    quiet=True
+                )
+                downloaded += 1
+                print(f"   ✅ Scaricato")
+                
+            except Exception as e:
+                failed += 1
+                print(f"   ❌ Errore: {e}")
+        
+        print(f"\n📊 Risultato: {downloaded} scaricati, {failed} falliti")
+        return downloaded > 0
+        
+    except Exception as e:
+        print(f"\n❌ Errore: {e}")
+        return False
 
 
 def setup_kaggle_credentials() -> None:
@@ -189,13 +462,25 @@ def verify_dataset(data_dir: Path) -> dict:
     print(f"📁 Directory root: {root}")
     
     for generator in GENERATORS:
-        # Prova diverse convenzioni di naming
-        gen_paths = [
+        # Usa il mapping delle cartelle per trovare il generatore
+        folder_patterns = GENERATOR_FOLDER_PATTERNS.get(generator, [])
+        
+        # Costruisci la lista di possibili path
+        gen_paths = []
+        
+        # Prima prova i pattern noti dal mapping
+        for pattern in folder_patterns:
+            gen_paths.append(root / pattern)
+            gen_paths.append(root / pattern.lower())
+            gen_paths.append(root / pattern.upper())
+        
+        # Poi prova anche le variazioni del nome display (per compatibilità)
+        gen_paths.extend([
             root / generator,
             root / generator.replace(" ", "_"),
             root / generator.replace(" ", "-"),
             root / generator.lower().replace(" ", "_"),
-        ]
+        ])
         
         gen_path = None
         for gp in gen_paths:
@@ -281,17 +566,20 @@ Esempi:
   # Mostra informazioni sul dataset
   python download_tiny_genimage.py --info
 
-  # Scarica il dataset
+  # Scarica il dataset (modalità standard)
   python download_tiny_genimage.py --output ./data/tiny-genimage
 
-  # Scarica senza estrarre
-  python download_tiny_genimage.py --output ./data/tiny-genimage --no-unzip
+  # ⭐ Scarica con BASSO CONSUMO DI MEMORIA (consigliato se hai poca RAM)
+  python download_tiny_genimage.py --low-memory --output ./data/tiny-genimage
+
+  # Scarica senza estrarre (poi estrai con --extract-streaming)
+  python download_tiny_genimage.py --low-memory --no-unzip --output ./data/tiny-genimage
+
+  # Estrai un archivio esistente in streaming (basso consumo memoria)
+  python download_tiny_genimage.py --extract-streaming ./data/tiny-genimage.zip --output ./data/
 
   # Verifica un dataset esistente
   python download_tiny_genimage.py --verify ./data/tiny-genimage
-
-  # Estrai un archivio esistente
-  python download_tiny_genimage.py --extract ./data/tiny-genimage.zip --output ./data/
         """,
     )
     
@@ -316,7 +604,7 @@ Esempi:
         "--extract", "-e",
         type=str,
         metavar="ZIP_PATH",
-        help="Estrai un archivio zip esistente",
+        help="Estrai un archivio zip esistente (metodo standard)",
     )
     parser.add_argument(
         "--no-unzip",
@@ -327,6 +615,26 @@ Esempi:
         "--force",
         action="store_true",
         help="Forza il download anche se i file esistono già",
+    )
+    
+    # Nuove opzioni per basso consumo di memoria
+    parser.add_argument(
+        "--low-memory", "-l",
+        action="store_true",
+        default=True,   
+        help="⭐ Modalità basso consumo memoria: scarica senza unzip, poi estrai in streaming",
+    )
+    parser.add_argument(
+        "--extract-streaming",
+        type=str,
+        metavar="ZIP_PATH",
+        help="Estrai un archivio zip in streaming (basso consumo memoria)",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=8192,
+        help="Dimensione chunk per streaming in bytes (default: 8192 = 8KB)",
     )
     
     args = parser.parse_args()
@@ -341,13 +649,24 @@ Esempi:
         verify_dataset(Path(args.verify))
         return 0
     
-    # Estrazione manuale
+    # Estrazione manuale (standard)
     if args.extract:
         extract_dataset(
             Path(args.extract),
             Path(args.output)
         )
         return 0
+    
+    # Estrazione streaming (basso consumo memoria)
+    if args.extract_streaming:
+        success = extract_zip_streaming(
+            Path(args.extract_streaming),
+            Path(args.output),
+            chunk_size=args.chunk_size
+        )
+        if success:
+            verify_dataset(Path(args.output))
+        return 0 if success else 1
     
     # Download
     print_info()
@@ -373,8 +692,42 @@ Esempi:
             print("❌ Download annullato.")
             return 0
     
-    # Download
-    success = download_dataset(output_dir, unzip=not args.no_unzip)
+    # Scegli il metodo di download
+    if args.low_memory:
+        # Modalità basso consumo di memoria
+        print("\n" + "=" * 60)
+        print("🔧 MODALITÀ BASSO CONSUMO MEMORIA ATTIVA")
+        print("=" * 60)
+        print("Questa modalità scarica senza estrarre, poi estrae in streaming.")
+        print("Ideale per sistemi con poca RAM.\n")
+        
+        # Step 1: Scarica senza estrarre
+        success = download_dataset_low_memory(output_dir, chunk_size=args.chunk_size)
+        
+        if success and not args.no_unzip:
+            # Step 2: Estrai in streaming
+            zip_path = output_dir / "tiny-genimage.zip"
+            if zip_path.exists():
+                print("\n" + "=" * 60)
+                print("📦 ESTRAZIONE STREAMING")
+                print("=" * 60)
+                success = extract_zip_streaming(zip_path, output_dir, chunk_size=args.chunk_size)
+                
+                if success:
+                    # Opzionale: rimuovi il file zip dopo l'estrazione
+                    print(f"\n💡 Puoi rimuovere il file zip per liberare spazio:")
+                    print(f"   del \"{zip_path}\"")
+            else:
+                print(f"\n⚠️  File ZIP non trovato: {zip_path}")
+                print("   Il download potrebbe aver salvato con un nome diverso.")
+                # Cerca file zip nella directory
+                zips = list(output_dir.glob("*.zip"))
+                if zips:
+                    print(f"   File ZIP trovati: {[z.name for z in zips]}")
+                    print(f"   Estrai manualmente con: python {Path(__file__).name} --extract-streaming <file.zip> -o {output_dir}")
+    else:
+        # Modalità standard (può causare OOM)
+        success = download_dataset(output_dir, unzip=not args.no_unzip)
     
     if success:
         print("\n" + "=" * 60)
