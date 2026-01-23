@@ -72,6 +72,6 @@ The features are typically saved as PyTorch tensors (`.pt` files).
 
 By default, feature tensors have shape `[1, seq_len, dim]` where:
 - `seq_len` is the sequence length (e.g., 1024 for 512x512 images)
-- `dim` is the hidden dimension (e.g., 1536 for SD3.5)
+- `dim` is the hidden dimension (e.g., 1536 for SD3.5 medium)
 
 With `--mean_pooling_only`, features are reduced to `[1, dim]` by averaging over the spatial dimension. This reduces disk usage by approximately 1000x while retaining the global feature representation.
