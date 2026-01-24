@@ -8,17 +8,22 @@ Exposes 'extract_features' function for folder processing.
 import os
 import sys
 import torch
-from PIL import Image
+from PIL import Image, ImageFile
 from tqdm import tqdm
 from glob import glob
 
+# Allow loading truncated images (some images in large datasets may be corrupted)
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# Add the sd3.5 directory to the path BEFORE importing modules that depend on it
+# sd3.5 is at project root level
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(_current_dir))  # Go up from src -> features-extractor-sd3.5 -> project root
+sys.path.insert(0, os.path.join(_project_root, "sd3.5"))
 
 # ---
 # Load precomputed text embeddings when provided
 from extract_text_embedding import load_text_embeddings
-
-# Add the sd3.5 directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sd3.5"))
 
 from sd3_impls import SD3LatentFormat, ModelSamplingDiscreteFlow
 from utils.model import load_sd35_model, validate_model_loading
@@ -345,65 +350,86 @@ def extract_features(
         stats["count"] = len(images)
 
         first_image_shapes = None
+        skipped_images = []
 
         # 6. Loop
         for image_path in tqdm(images, desc=f"Extracting {category}"):
-            attn_weights = extract_features_from_image(
-                image_path,
-                model,
-                vae,
-                transform,
-                sigma,
-                device,
-                dtype,
-                features_x,
-                features_context,
-                timestep,
-                extract_attention,
-                conditioning,
-            )
-
-            # Aggregate
-            agg_x = aggregate_layer_features(
-                features_x, mean_pooling_only=mean_pooling_only
-            )
-            agg_ctx = aggregate_layer_features(
-                features_context, mean_pooling_only=mean_pooling_only
-            )
-
-            # Filter if apply_mean is False
-            if not apply_mean:
-                agg_x.pop("middle_avg", None)
-                agg_ctx.pop("middle_avg", None)
-
-            image_name = os.path.basename(image_path).split(".")[0]
-            save_features(agg_x, output_dir, "hidden_x", category, image_name)
-            save_features(agg_ctx, output_dir, "hidden_context", category, image_name)
-
-            agg_attn = None
-            if extract_attention:
-                agg_attn = aggregate_attention_features(
-                    attn_weights, layers_to_save, mean_pooling_only=mean_pooling_only
+            try:
+                attn_weights = extract_features_from_image(
+                    image_path,
+                    model,
+                    vae,
+                    transform,
+                    sigma,
+                    device,
+                    dtype,
+                    features_x,
+                    features_context,
+                    timestep,
+                    extract_attention,
+                    conditioning,
                 )
-                if not apply_mean:
-                    # Remove middle_avg keys
-                    agg_attn = {
-                        k: v for k, v in agg_attn.items() if "middle_avg" not in k
-                    }
-                save_features(agg_attn, output_dir, "attention", category, image_name)
 
-            # Capture shapes from first image
-            if first_image_shapes is None:
-                first_image_shapes = {
-                    "hidden_x": {k: list(v.shape) for k, v in agg_x.items()},
-                    "hidden_context": {k: list(v.shape) for k, v in agg_ctx.items()},
-                    "attention": {},
-                }
-                if agg_attn:
-                    first_image_shapes["attention"] = {
-                        k: list(v.shape) for k, v in agg_attn.items()
+                # Aggregate
+                agg_x = aggregate_layer_features(
+                    features_x, mean_pooling_only=mean_pooling_only
+                )
+                agg_ctx = aggregate_layer_features(
+                    features_context, mean_pooling_only=mean_pooling_only
+                )
+
+                # Filter if apply_mean is False
+                if not apply_mean:
+                    agg_x.pop("middle_avg", None)
+                    agg_ctx.pop("middle_avg", None)
+
+                image_name = os.path.basename(image_path).split(".")[0]
+                save_features(agg_x, output_dir, "hidden_x", category, image_name)
+                save_features(agg_ctx, output_dir, "hidden_context", category, image_name)
+
+                agg_attn = None
+                if extract_attention:
+                    agg_attn = aggregate_attention_features(
+                        attn_weights, layers_to_save, mean_pooling_only=mean_pooling_only
+                    )
+                    if not apply_mean:
+                        # Remove middle_avg keys
+                        agg_attn = {
+                            k: v for k, v in agg_attn.items() if "middle_avg" not in k
+                        }
+                    save_features(agg_attn, output_dir, "attention", category, image_name)
+
+                # Capture shapes from first image
+                if first_image_shapes is None:
+                    first_image_shapes = {
+                        "hidden_x": {k: list(v.shape) for k, v in agg_x.items()},
+                        "hidden_context": {k: list(v.shape) for k, v in agg_ctx.items()},
+                        "attention": {},
                     }
-                stats["shapes"] = first_image_shapes
+                    if agg_attn:
+                        first_image_shapes["attention"] = {
+                            k: list(v.shape) for k, v in agg_attn.items()
+                        }
+                    stats["shapes"] = first_image_shapes
+
+            except (OSError, IOError) as e:
+                # Handle corrupted/truncated images gracefully
+                skipped_images.append((image_path, str(e)))
+                continue
+            except Exception as e:
+                # Log unexpected errors but continue processing
+                skipped_images.append((image_path, f"Unexpected error: {str(e)}"))
+                continue
+
+        # Report skipped images
+        if skipped_images:
+            stats["skipped_count"] = len(skipped_images)
+            stats["skipped_images"] = skipped_images
+            print(f"\nWarning: Skipped {len(skipped_images)} corrupted/problematic images:")
+            for path, error in skipped_images[:10]:  # Show first 10
+                print(f"  - {os.path.basename(path)}: {error}")
+            if len(skipped_images) > 10:
+                print(f"  ... and {len(skipped_images) - 10} more")
 
     finally:
         # Guarantee hooks are removed so model is clean
