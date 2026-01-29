@@ -4,6 +4,14 @@ import random
 from io import BytesIO
 
 
+def exif_transpose_fn(img):
+    return ImageOps.exif_transpose(img)
+
+
+def convert_rgb_fn(img):
+    return img.convert("RGB")
+
+
 class RobustJPEGTransform:
     """Applica compressione JPEG random per mitigare il bias di formato PNG/JPEG."""
 
@@ -38,8 +46,8 @@ class StandardPreprocessor:
 
     def _build_transform(self):
         pipeline = [
-            transforms.Lambda(lambda im: ImageOps.exif_transpose(im)),
-            transforms.Lambda(lambda im: im.convert("RGB")),
+            transforms.Lambda(exif_transpose_fn),
+            transforms.Lambda(convert_rgb_fn),
         ]
 
         # 1. Geometric Transformations

@@ -16,10 +16,10 @@ from glob import glob
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 # Add the sd3.5 directory to the path BEFORE importing modules that depend on it
-# sd3.5 is at project root level
+# sd3.5 is in features-extractor-sd3.5/sd3.5
 _current_dir = os.path.dirname(os.path.abspath(__file__))
-_project_root = os.path.dirname(os.path.dirname(_current_dir))  # Go up from src -> features-extractor-sd3.5 -> project root
-sys.path.insert(0, os.path.join(_project_root, "sd3.5"))
+_repo_root = os.path.dirname(_current_dir)  # features-extractor-sd3.5
+sys.path.insert(0, os.path.join(_repo_root, "sd3.5"))
 
 # ---
 # Load precomputed text embeddings when provided
