@@ -7,13 +7,14 @@ Exposes 'extract_features' function for folder processing.
 
 import os
 import sys
+from glob import glob
 import torch
 from PIL import Image, ImageFile
 from tqdm import tqdm
-from glob import glob
+
 
 # Allow loading truncated images (some images in large datasets may be corrupted)
-ImageFile.LOAD_TRUNCATED_IMAGES = True
+ImageFile.LOAD_TRUNCATED_IMAGES = False
 
 # Add the sd3.5 directory to the path BEFORE importing modules that depend on it
 # sd3.5 is in features-extractor-sd3.5/sd3.5
@@ -38,7 +39,7 @@ ATTENTION_LAYERS_TO_SAVE = [0, 1, 2, 12, 23, 35, 36, 37]
 
 
 def setup_output_directories_for_category(
-    output_path, category, extract_attention=False
+    output_path, category, extract_attention=False, skip_context=False
 ):
     """Create output directory structure for features specific to a category."""
     os.makedirs(output_path, exist_ok=True)
@@ -46,7 +47,10 @@ def setup_output_directories_for_category(
     # Hidden features (x) - image branch
     os.makedirs(os.path.join(output_path, "hidden_x", category), exist_ok=True)
     # Hidden features (context) - text branch
-    os.makedirs(os.path.join(output_path, "hidden_context", category), exist_ok=True)
+    if not skip_context:
+        os.makedirs(
+            os.path.join(output_path, "hidden_context", category), exist_ok=True
+        )
     # Attention weights
     if extract_attention:
         os.makedirs(os.path.join(output_path, "attention", category), exist_ok=True)
@@ -66,14 +70,14 @@ def collect_images(images_path, num_images=-1):
 
 class ImageDataset(torch.utils.data.Dataset):
     """Dataset for efficient batch loading of images."""
-    
+
     def __init__(self, image_paths, transform):
         self.image_paths = image_paths
         self.transform = transform
-    
+
     def __len__(self):
         return len(self.image_paths)
-    
+
     def __getitem__(self, idx):
         image_path = self.image_paths[idx]
         try:
@@ -90,10 +94,10 @@ def collate_fn_skip_errors(batch):
     """Custom collate function that filters out failed images."""
     valid_items = [(img, path) for img, path, success in batch if success]
     failed_paths = [path for _, path, success in batch if not success]
-    
+
     if not valid_items:
         return None, [], failed_paths
-    
+
     images = torch.stack([item[0] for item in valid_items])
     paths = [item[1] for item in valid_items]
     return images, paths, failed_paths
@@ -114,28 +118,28 @@ def extract_features_from_batch(
     conditioning=None,
 ):
     """Extract features from a batch of images.
-    
+
     Returns:
         List of (image_path, agg_x, agg_ctx, attn_weights) tuples
     """
     features_x.clear()
     features_context.clear()
-    
+
     batch_size = image_tensors.shape[0]
     image_tensors = image_tensors.to(device, dtype)
-    
+
     attention_weights = {}
-    
+
     with torch.no_grad():
         latents = vae.encode(image_tensors)
         latents = SD3LatentFormat().process_in(latents)
-        
+
         if timestep > 0:
             noise = torch.randn_like(latents)
             noised_latents = sigma * noise + (1.0 - sigma) * latents
         else:
             noised_latents = latents
-        
+
         if conditioning is not None:
             cond_context, cond_y = conditioning
             context = cond_context.to(device=device, dtype=dtype)
@@ -148,14 +152,14 @@ def extract_features_from_batch(
             context, y = create_empty_conditioning(
                 batch_size, device, dtype, model=model
             )
-        
+
         _ = model.apply_model(
             noised_latents,
             sigma.expand(batch_size),
             c_crossattn=context,
             y=y,
         )
-        
+
         if extract_attention:
             with AttentionCapture(model) as attn_capture:
                 _ = model.apply_model(
@@ -165,20 +169,24 @@ def extract_features_from_batch(
                     y=y,
                 )
                 attention_weights.update(attn_capture.attention_weights)
-    
+
     # Split features by batch index - features are stored with batch dimension
     results = []
     for batch_idx, image_path in enumerate(image_paths):
         # Extract per-image features from batched features
-        per_image_x = {k: v[batch_idx:batch_idx+1] for k, v in features_x.items()}
-        per_image_ctx = {k: v[batch_idx:batch_idx+1] for k, v in features_context.items()}
-        
+        per_image_x = {k: v[batch_idx : batch_idx + 1] for k, v in features_x.items()}
+        per_image_ctx = {
+            k: v[batch_idx : batch_idx + 1] for k, v in features_context.items()
+        }
+
         per_image_attn = {}
         if extract_attention:
-            per_image_attn = {k: v[batch_idx:batch_idx+1] for k, v in attention_weights.items()}
-        
+            per_image_attn = {
+                k: v[batch_idx : batch_idx + 1] for k, v in attention_weights.items()
+            }
+
         results.append((image_path, per_image_x, per_image_ctx, per_image_attn))
-    
+
     return results
 
 
@@ -249,13 +257,17 @@ def extract_features_from_image(
     return attention_weights
 
 
-def aggregate_layer_features(features_dict, mean_pooling_only=False):
+def aggregate_layer_features(
+    features_dict, mean_pooling_only=False, last_layer_only=False
+):
     """Aggregate layer features: keep first, last, and average of all layers.
 
     Args:
         features_dict: Dictionary of layer_name -> tensor.
         mean_pooling_only: If True, apply spatial mean pooling to reduce tensor size.
                           Reduces [1, seq_len, dim] to [1, dim].
+        last_layer_only: If True, return only the last layer's features.
+                        This significantly reduces disk space (~66% savings).
     """
     if not features_dict:
         return {}
@@ -274,6 +286,12 @@ def aggregate_layer_features(features_dict, mean_pooling_only=False):
         return tensor
 
     aggregated = {}
+
+    # If last_layer_only, return only the last layer
+    if last_layer_only:
+        aggregated["last"] = apply_pooling(features_dict[sorted_keys[-1]])
+        return aggregated
+
     aggregated["first"] = apply_pooling(features_dict[sorted_keys[0]])
     if num_layers >= 2:
         aggregated["last"] = apply_pooling(features_dict[sorted_keys[-1]])
@@ -371,6 +389,8 @@ def extract_features(
     preprocessing_mode="genimage_resize",
     jpeg_aug=True,
     mean_pooling_only=False,
+    last_layer_only=False,
+    skip_context=False,
     batch_size=1,
     num_workers=4,
     torch_compile=False,
@@ -400,6 +420,8 @@ def extract_features(
         jpeg_aug: Whether to apply JPEG augmentation/compression.
         mean_pooling_only: If True, apply spatial mean pooling to features before saving.
                           This reduces [1, seq_len, dim] to [1, dim], saving disk space.
+        last_layer_only: If True, save only the last layer's features (~66% disk savings).
+        skip_context: If True, skip saving hidden_context features (~50% additional savings).
         batch_size: Number of images to process per batch (default: 1).
                    Higher values speed up processing but use more VRAM.
         num_workers: Number of workers for DataLoader (default: 4).
@@ -430,8 +452,12 @@ def extract_features(
 
     # 2.5 Apply torch.compile if requested
     if torch_compile:
-        print("Compiling model with torch.compile (this may take a minute on first run)...")
-        model.diffusion_model = torch.compile(model.diffusion_model, mode="reduce-overhead")
+        print(
+            "Compiling model with torch.compile (this may take a minute on first run)..."
+        )
+        model.diffusion_model = torch.compile(
+            model.diffusion_model, mode="reduce-overhead"
+        )
         vae = torch.compile(vae, mode="reduce-overhead")
 
     # 3. Setup Hooks
@@ -449,7 +475,9 @@ def extract_features(
 
     try:
         # 4. Preparation
-        setup_output_directories_for_category(output_dir, category, extract_attention)
+        setup_output_directories_for_category(
+            output_dir, category, extract_attention, skip_context
+        )
 
         model_sampling = ModelSamplingDiscreteFlow(shift=3.0)
 
@@ -497,16 +525,16 @@ def extract_features(
                 pin_memory=True,
                 collate_fn=collate_fn_skip_errors,
             )
-            
+
             pbar = tqdm(dataloader, desc=f"Extracting {category} (batch={batch_size})")
             for image_tensors, image_paths, failed_paths in pbar:
                 # Track failed images
                 for path in failed_paths:
                     skipped_images.append((path, "Failed to load image"))
-                
+
                 if image_tensors is None or len(image_paths) == 0:
                     continue
-                
+
                 try:
                     # Extract features from batch
                     batch_results = extract_features_from_batch(
@@ -523,42 +551,74 @@ def extract_features(
                         extract_attention,
                         conditioning,
                     )
-                    
+
                     # Process each image's results
-                    for image_path, per_image_x, per_image_ctx, per_image_attn in batch_results:
+                    for (
+                        image_path,
+                        per_image_x,
+                        per_image_ctx,
+                        per_image_attn,
+                    ) in batch_results:
                         # Aggregate features
                         agg_x = aggregate_layer_features(
-                            per_image_x, mean_pooling_only=mean_pooling_only
+                            per_image_x,
+                            mean_pooling_only=mean_pooling_only,
+                            last_layer_only=last_layer_only,
                         )
-                        agg_ctx = aggregate_layer_features(
-                            per_image_ctx, mean_pooling_only=mean_pooling_only
+                        agg_ctx = (
+                            {}
+                            if skip_context
+                            else aggregate_layer_features(
+                                per_image_ctx,
+                                mean_pooling_only=mean_pooling_only,
+                                last_layer_only=last_layer_only,
+                            )
                         )
-                        
+
                         # Filter if apply_mean is False
                         if not apply_mean:
                             agg_x.pop("middle_avg", None)
                             agg_ctx.pop("middle_avg", None)
-                        
+
                         image_name = os.path.basename(image_path).split(".")[0]
-                        save_features(agg_x, output_dir, "hidden_x", category, image_name)
-                        save_features(agg_ctx, output_dir, "hidden_context", category, image_name)
-                        
+                        save_features(
+                            agg_x, output_dir, "hidden_x", category, image_name
+                        )
+                        if not skip_context:
+                            save_features(
+                                agg_ctx,
+                                output_dir,
+                                "hidden_context",
+                                category,
+                                image_name,
+                            )
+
                         agg_attn = None
                         if extract_attention:
                             agg_attn = aggregate_attention_features(
-                                per_image_attn, layers_to_save, mean_pooling_only=mean_pooling_only
+                                per_image_attn,
+                                layers_to_save,
+                                mean_pooling_only=mean_pooling_only,
                             )
                             if not apply_mean:
                                 agg_attn = {
-                                    k: v for k, v in agg_attn.items() if "middle_avg" not in k
+                                    k: v
+                                    for k, v in agg_attn.items()
+                                    if "middle_avg" not in k
                                 }
-                            save_features(agg_attn, output_dir, "attention", category, image_name)
-                        
+                            save_features(
+                                agg_attn, output_dir, "attention", category, image_name
+                            )
+
                         # Capture shapes from first image
                         if first_image_shapes is None:
                             first_image_shapes = {
-                                "hidden_x": {k: list(v.shape) for k, v in agg_x.items()},
-                                "hidden_context": {k: list(v.shape) for k, v in agg_ctx.items()},
+                                "hidden_x": {
+                                    k: list(v.shape) for k, v in agg_x.items()
+                                },
+                                "hidden_context": {
+                                    k: list(v.shape) for k, v in agg_ctx.items()
+                                },
                                 "attention": {},
                             }
                             if agg_attn:
@@ -566,7 +626,7 @@ def extract_features(
                                     k: list(v.shape) for k, v in agg_attn.items()
                                 }
                             stats["shapes"] = first_image_shapes
-                
+
                 except Exception as e:
                     # Log batch error and continue
                     for path in image_paths:
@@ -593,10 +653,18 @@ def extract_features(
 
                     # Aggregate
                     agg_x = aggregate_layer_features(
-                        features_x, mean_pooling_only=mean_pooling_only
+                        features_x,
+                        mean_pooling_only=mean_pooling_only,
+                        last_layer_only=last_layer_only,
                     )
-                    agg_ctx = aggregate_layer_features(
-                        features_context, mean_pooling_only=mean_pooling_only
+                    agg_ctx = (
+                        {}
+                        if skip_context
+                        else aggregate_layer_features(
+                            features_context,
+                            mean_pooling_only=mean_pooling_only,
+                            last_layer_only=last_layer_only,
+                        )
                     )
 
                     # Filter if apply_mean is False
@@ -606,25 +674,36 @@ def extract_features(
 
                     image_name = os.path.basename(image_path).split(".")[0]
                     save_features(agg_x, output_dir, "hidden_x", category, image_name)
-                    save_features(agg_ctx, output_dir, "hidden_context", category, image_name)
+                    if not skip_context:
+                        save_features(
+                            agg_ctx, output_dir, "hidden_context", category, image_name
+                        )
 
                     agg_attn = None
                     if extract_attention:
                         agg_attn = aggregate_attention_features(
-                            attn_weights, layers_to_save, mean_pooling_only=mean_pooling_only
+                            attn_weights,
+                            layers_to_save,
+                            mean_pooling_only=mean_pooling_only,
                         )
                         if not apply_mean:
                             # Remove middle_avg keys
                             agg_attn = {
-                                k: v for k, v in agg_attn.items() if "middle_avg" not in k
+                                k: v
+                                for k, v in agg_attn.items()
+                                if "middle_avg" not in k
                             }
-                        save_features(agg_attn, output_dir, "attention", category, image_name)
+                        save_features(
+                            agg_attn, output_dir, "attention", category, image_name
+                        )
 
                     # Capture shapes from first image
                     if first_image_shapes is None:
                         first_image_shapes = {
                             "hidden_x": {k: list(v.shape) for k, v in agg_x.items()},
-                            "hidden_context": {k: list(v.shape) for k, v in agg_ctx.items()},
+                            "hidden_context": {
+                                k: list(v.shape) for k, v in agg_ctx.items()
+                            },
                             "attention": {},
                         }
                         if agg_attn:
@@ -646,7 +725,9 @@ def extract_features(
         if skipped_images:
             stats["skipped_count"] = len(skipped_images)
             stats["skipped_images"] = skipped_images
-            print(f"\nWarning: Skipped {len(skipped_images)} corrupted/problematic images:")
+            print(
+                f"\nWarning: Skipped {len(skipped_images)} corrupted/problematic images:"
+            )
             for path, error in skipped_images[:10]:  # Show first 10
                 print(f"  - {os.path.basename(path)}: {error}")
             if len(skipped_images) > 10:
@@ -658,4 +739,3 @@ def extract_features(
             h.remove()
 
     return stats
-
