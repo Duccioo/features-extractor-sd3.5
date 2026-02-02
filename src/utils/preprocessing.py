@@ -4,6 +4,20 @@ import random
 from io import BytesIO
 
 
+def safe_exif_transpose(image):
+    """
+    Safely apply EXIF transpose to an image, handling corrupted metadata.
+    
+    Some images have corrupted or non-UTF-8 XMP/EXIF data that causes
+    UnicodeDecodeError when PIL tries to read the metadata.
+    """
+    try:
+        return ImageOps.exif_transpose(image)
+    except (UnicodeDecodeError, AttributeError, KeyError, TypeError) as e:
+        # Return original image if EXIF data is corrupted
+        return image
+
+
 class RobustJPEGTransform:
     """Applica compressione JPEG random per mitigare il bias di formato PNG/JPEG."""
 
@@ -38,7 +52,7 @@ class StandardPreprocessor:
 
     def _build_transform(self):
         pipeline = [
-            transforms.Lambda(lambda im: ImageOps.exif_transpose(im)),
+            transforms.Lambda(lambda im: safe_exif_transpose(im)),
             transforms.Lambda(lambda im: im.convert("RGB")),
         ]
 
