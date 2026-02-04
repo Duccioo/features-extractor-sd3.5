@@ -566,9 +566,20 @@ def extract_features(
                                     k: list(v.shape) for k, v in agg_attn.items()
                                 }
                             stats["shapes"] = first_image_shapes
+                    
+                    # Aggressive memory cleanup after each batch
+                    import gc
+                    gc.collect()
+                    torch.cuda.empty_cache()
                 
                 except Exception as e:
                     # Log batch error and continue
+                    import traceback
+                    print(f"\n[DEBUG] Batch error: {str(e)}")
+                    traceback.print_exc()
+                    # Extra cleanup on error
+                    gc.collect()
+                    torch.cuda.empty_cache()
                     for path in image_paths:
                         skipped_images.append((path, f"Batch error: {str(e)}"))
                     continue
