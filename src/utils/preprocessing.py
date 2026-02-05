@@ -22,12 +22,16 @@ class RobustJPEGTransform:
     def __call__(self, img):
         # Applica con probabilità p (usa p=1.0 per validation/test se vuoi standardizzare tutto)
         if random.random() < self.p:
-            output = BytesIO()
+            buffer = BytesIO()
             # Scelta random della qualità
             q = random.randint(*self.quality_range)
-            img.save(output, "JPEG", quality=q)
-            output.seek(0)
-            return Image.open(output).convert("RGB")
+            img.save(buffer, "JPEG", quality=q)
+            buffer.seek(0)
+            # Load image into memory and close buffer to prevent memory leak
+            jpeg_img = Image.open(buffer)
+            jpeg_img.load()  # Force load into memory
+            buffer.close()
+            return jpeg_img.convert("RGB")
         return img
 
 

@@ -9,6 +9,14 @@ import torch
 # Add the sd3.5 directory to the path (relative to src/utils/)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "sd3.5"))
 
+# Import SD3.5 modules for attention capture (must be after path setup)
+try:
+    import other_impls
+    import mmditx
+except ImportError:
+    other_impls = None
+    mmditx = None
+
 
 def create_feature_hook(features_dict, name, output_index=1):
     """Create a hook function to capture features from a layer.
@@ -120,8 +128,8 @@ class AttentionCapture:
         has_self_attn = block_idx in self.blocks_with_self_attn
 
         def wrapped_forward(context, x, c):
-            import other_impls
-            import mmditx
+            if other_impls is None or mmditx is None:
+                raise ImportError("other_impls or mmditx not available - check sd3.5 path")
 
             original_attention = other_impls.attention
             captured_attentions = []

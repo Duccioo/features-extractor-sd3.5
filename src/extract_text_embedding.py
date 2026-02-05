@@ -176,7 +176,12 @@ def load_text_embeddings(
         cond = load_text_embeddings("text_embeddings.pt", "a photo")
         model.apply_model(x, sigma, c_crossattn=cond['c_crossattn'], y=cond['y'])
     """
-    data = torch.load(filepath, weights_only=False)
+    # Use weights_only=True for security; fallback to False for older files if needed
+    try:
+        data = torch.load(filepath, weights_only=True)
+    except Exception:
+        # Fallback for older embedding files that may contain non-tensor data
+        data = torch.load(filepath, weights_only=False)
 
     if prompt is None:
         return data

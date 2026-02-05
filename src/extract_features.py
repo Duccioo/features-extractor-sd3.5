@@ -11,9 +11,11 @@ from glob import glob
 import torch
 from PIL import Image, ImageFile
 from tqdm import tqdm
+import gc
+import traceback
 
 
-# Allow loading truncated images (some images in large datasets may be corrupted)
+# Do NOT allow loading truncated images - fail fast on corrupted files
 ImageFile.LOAD_TRUNCATED_IMAGES = False
 
 # Add the sd3.5 directory to the path BEFORE importing modules that depend on it
@@ -33,9 +35,18 @@ from utils.conditioning import create_empty_conditioning
 from utils.preprocessing import StandardPreprocessor
 
 
-# Default attention layers to save (if not specified)
 # SD3.5 has 38 joint blocks (layers 0-37)
-ATTENTION_LAYERS_TO_SAVE = [0, 1, 2, 12, 23, 35, 36, 37]
+# Image branch features (hidden_x) - 38 layers available (0-37)
+SELECTED_LAYERS_X = [0, 37]
+
+# Text branch features (hidden_context) - 37 layers available (0-36)
+# Note: Layer 37 does NOT exist for context (pre_only=True in last joint block)
+SELECTED_LAYERS_CONTEXT = [0, 36]
+
+# Attention weights - uses same layer indexing as hidden_x (0-37)
+# These only take effect if --extract_attention is enabled
+SELECTED_LAYERS_ATTENTION = [0, 37]
+
 
 
 def setup_output_directories_for_category(
@@ -258,16 +269,16 @@ def extract_features_from_image(
 
 
 def aggregate_layer_features(
-    features_dict, mean_pooling_only=False, last_layer_only=False
+    features_dict, mean_pooling_only=False, selected_layers=None
 ):
-    """Aggregate layer features: keep first, last, and average of all layers.
+    """Aggregate layer features: keep first, last, average of all layers, and selected layers.
 
     Args:
         features_dict: Dictionary of layer_name -> tensor.
         mean_pooling_only: If True, apply spatial mean pooling to reduce tensor size.
                           Reduces [1, seq_len, dim] to [1, dim].
-        last_layer_only: If True, return only the last layer's features.
-                        This significantly reduces disk space (~66% savings).
+        selected_layers: Optional list of layer indices to also save (e.g., [1, 5, 20, 37]).
+                        These are saved in addition to first/last/middle_avg.
     """
     if not features_dict:
         return {}
@@ -287,11 +298,6 @@ def aggregate_layer_features(
 
     aggregated = {}
 
-    # If last_layer_only, return only the last layer
-    if last_layer_only:
-        aggregated["last"] = apply_pooling(features_dict[sorted_keys[-1]])
-        return aggregated
-
     aggregated["first"] = apply_pooling(features_dict[sorted_keys[0]])
     if num_layers >= 2:
         aggregated["last"] = apply_pooling(features_dict[sorted_keys[-1]])
@@ -299,6 +305,13 @@ def aggregate_layer_features(
     all_tensors = [features_dict[k] for k in sorted_keys]
     stacked = torch.stack(all_tensors, dim=0)
     aggregated["middle_avg"] = apply_pooling(stacked.mean(dim=0))
+
+    # Add selected layers if specified
+    if selected_layers is not None:
+        for layer_idx in selected_layers:
+            key = f"block_{layer_idx}"
+            if key in features_dict:
+                aggregated[f"layer_{layer_idx}"] = apply_pooling(features_dict[key])
 
     return aggregated
 
@@ -378,7 +391,6 @@ def extract_features(
     vae=None,
     model_path=None,
     timestep=0,
-    layers_to_save=ATTENTION_LAYERS_TO_SAVE,
     extract_attention=False,
     num_images=-1,
     image_size=512,
@@ -386,11 +398,13 @@ def extract_features(
     text_embedding_path=None,
     text_embedding_prompt="",
     apply_mean=True,
-    preprocessing_mode="genimage_resize",
+    preprocessing_mode="imagenet_style",
     jpeg_aug=True,
     mean_pooling_only=False,
-    last_layer_only=False,
     skip_context=False,
+    selected_layers_x=None,
+    selected_layers_context=None,
+    selected_layers_attention=None,
     batch_size=1,
     num_workers=4,
     torch_compile=False,
@@ -408,7 +422,6 @@ def extract_features(
         vae: Loaded VAE.
         model_path: Path to model checkpoint if model not provided.
         timestep: Diffusion timestep (0-1000).
-        layers_to_save: List of attention layers to save.
         extract_attention: Boolean to extract attention weights.
         num_images: Max images to process.
         image_size: Target image size.
@@ -420,8 +433,10 @@ def extract_features(
         jpeg_aug: Whether to apply JPEG augmentation/compression.
         mean_pooling_only: If True, apply spatial mean pooling to features before saving.
                           This reduces [1, seq_len, dim] to [1, dim], saving disk space.
-        last_layer_only: If True, save only the last layer's features (~66% disk savings).
         skip_context: If True, skip saving hidden_context features (~50% additional savings).
+        selected_layers_x: Optional list of layer indices for hidden_x (image branch, 0-37).
+        selected_layers_context: Optional list of layer indices for hidden_context (text branch, 0-36).
+        selected_layers_attention: Optional list of layer indices for attention weights (0-37).
         batch_size: Number of images to process per batch (default: 1).
                    Higher values speed up processing but use more VRAM.
         num_workers: Number of workers for DataLoader (default: 4).
@@ -563,7 +578,7 @@ def extract_features(
                         agg_x = aggregate_layer_features(
                             per_image_x,
                             mean_pooling_only=mean_pooling_only,
-                            last_layer_only=last_layer_only,
+                            selected_layers=selected_layers_x,
                         )
                         agg_ctx = (
                             {}
@@ -571,7 +586,7 @@ def extract_features(
                             else aggregate_layer_features(
                                 per_image_ctx,
                                 mean_pooling_only=mean_pooling_only,
-                                last_layer_only=last_layer_only,
+                                selected_layers=selected_layers_context,
                             )
                         )
 
@@ -580,7 +595,7 @@ def extract_features(
                             agg_x.pop("middle_avg", None)
                             agg_ctx.pop("middle_avg", None)
 
-                        image_name = os.path.basename(image_path).split(".")[0]
+                        image_name = os.path.splitext(os.path.basename(image_path))[0]
                         save_features(
                             agg_x, output_dir, "hidden_x", category, image_name
                         )
@@ -595,9 +610,11 @@ def extract_features(
 
                         agg_attn = None
                         if extract_attention:
+                            # Use selected_layers_attention if provided, else fall back to layers_to_save
+                            attn_layers = selected_layers_attention
                             agg_attn = aggregate_attention_features(
                                 per_image_attn,
-                                layers_to_save,
+                                attn_layers,
                                 mean_pooling_only=mean_pooling_only,
                             )
                             if not apply_mean:
@@ -626,20 +643,21 @@ def extract_features(
                                     k: list(v.shape) for k, v in agg_attn.items()
                                 }
                             stats["shapes"] = first_image_shapes
-                    
+
                     # Aggressive memory cleanup after each batch
-                    import gc
                     gc.collect()
                     torch.cuda.empty_cache()
                 
                 except Exception as e:
                     # Log batch error and continue
-                    import traceback
                     print(f"\n[DEBUG] Batch error: {str(e)}")
                     traceback.print_exc()
                     # Extra cleanup on error
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                    try:
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
                     for path in image_paths:
                         skipped_images.append((path, f"Batch error: {str(e)}"))
                     continue
@@ -666,7 +684,7 @@ def extract_features(
                     agg_x = aggregate_layer_features(
                         features_x,
                         mean_pooling_only=mean_pooling_only,
-                        last_layer_only=last_layer_only,
+                        selected_layers=selected_layers_x,
                     )
                     agg_ctx = (
                         {}
@@ -674,7 +692,7 @@ def extract_features(
                         else aggregate_layer_features(
                             features_context,
                             mean_pooling_only=mean_pooling_only,
-                            last_layer_only=last_layer_only,
+                            selected_layers=selected_layers_context,
                         )
                     )
 
@@ -683,7 +701,7 @@ def extract_features(
                         agg_x.pop("middle_avg", None)
                         agg_ctx.pop("middle_avg", None)
 
-                    image_name = os.path.basename(image_path).split(".")[0]
+                    image_name = os.path.splitext(os.path.basename(image_path))[0]
                     save_features(agg_x, output_dir, "hidden_x", category, image_name)
                     if not skip_context:
                         save_features(
@@ -692,9 +710,11 @@ def extract_features(
 
                     agg_attn = None
                     if extract_attention:
+                        # Use selected_layers_attention if provided, else fall back to layers_to_save
+                        attn_layers = selected_layers_attention
                         agg_attn = aggregate_attention_features(
                             attn_weights,
-                            layers_to_save,
+                            attn_layers,
                             mean_pooling_only=mean_pooling_only,
                         )
                         if not apply_mean:
