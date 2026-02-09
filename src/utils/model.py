@@ -64,8 +64,8 @@ def load_into(ckpt, model, prefix, device, dtype=None):
                     if hasattr(obj, "requires_grad"):
                         obj.requires_grad = False
                 loaded += 1
-            except Exception:
-                missing_attrs.append(model_key)
+            except (AttributeError, RuntimeError, TypeError) as e:
+                missing_attrs.append(f"{model_key} ({type(e).__name__})")
                 continue
 
     if missing_attrs:

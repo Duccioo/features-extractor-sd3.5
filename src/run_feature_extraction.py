@@ -17,7 +17,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from utils.system import DualLogger, get_system_info
 from utils.model import load_sd35_model, validate_model_loading
-from extract_features import extract_features, ATTENTION_LAYERS_TO_SAVE
+from extract_features import (
+    extract_features,
+    SELECTED_LAYERS_X,
+    SELECTED_LAYERS_CONTEXT,
+    SELECTED_LAYERS_ATTENTION,
+)
 
 
 def setup_logging(output_path):
@@ -145,7 +150,9 @@ def main():
             model=model,
             vae=vae,
             timestep=args.timestep,
-            layers_to_save=ATTENTION_LAYERS_TO_SAVE,
+            selected_layers_x=SELECTED_LAYERS_X,
+            selected_layers_context=SELECTED_LAYERS_CONTEXT,
+            selected_layers_attention=SELECTED_LAYERS_ATTENTION,
             extract_attention=args.extract_attention,
             num_images=args.num_images,
             image_size=args.image_size,
@@ -172,7 +179,9 @@ def main():
             model=model,
             vae=vae,
             timestep=args.timestep,
-            layers_to_save=ATTENTION_LAYERS_TO_SAVE,
+            selected_layers_x=SELECTED_LAYERS_X,
+            selected_layers_context=SELECTED_LAYERS_CONTEXT,
+            selected_layers_attention=SELECTED_LAYERS_ATTENTION,
             extract_attention=args.extract_attention,
             num_images=args.num_images,
             image_size=args.image_size,
