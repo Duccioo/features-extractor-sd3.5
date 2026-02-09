@@ -36,6 +36,9 @@ from utils.preprocessing import StandardPreprocessor
 
 
 # SD3.5 has 38 joint blocks (layers 0-37)
+# Default layers to save: first (0) and last layer
+# These are passed to extract_features() - modify here or override at call site
+
 # Image branch features (hidden_x) - 38 layers available (0-37)
 SELECTED_LAYERS_X = [0, 37]
 
@@ -271,14 +274,14 @@ def extract_features_from_image(
 def aggregate_layer_features(
     features_dict, mean_pooling_only=False, selected_layers=None
 ):
-    """Aggregate layer features: keep first, last, average of all layers, and selected layers.
+    """Aggregate layer features: keep average of all layers and selected layers.
 
     Args:
         features_dict: Dictionary of layer_name -> tensor.
         mean_pooling_only: If True, apply spatial mean pooling to reduce tensor size.
                           Reduces [1, seq_len, dim] to [1, dim].
-        selected_layers: Optional list of layer indices to also save (e.g., [1, 5, 20, 37]).
-                        These are saved in addition to first/last/middle_avg.
+        selected_layers: Optional list of layer indices to save (e.g., [0, 37] for first/last).
+                        If you want first/last layers, include them in this list.
     """
     if not features_dict:
         return {}
@@ -298,15 +301,12 @@ def aggregate_layer_features(
 
     aggregated = {}
 
-    aggregated["first"] = apply_pooling(features_dict[sorted_keys[0]])
-    if num_layers >= 2:
-        aggregated["last"] = apply_pooling(features_dict[sorted_keys[-1]])
-
+    # Always save mean of all layers
     all_tensors = [features_dict[k] for k in sorted_keys]
     stacked = torch.stack(all_tensors, dim=0)
     aggregated["middle_avg"] = apply_pooling(stacked.mean(dim=0))
 
-    # Add selected layers if specified
+    # Add selected layers if specified (e.g., [0, 37] for first/last)
     if selected_layers is not None:
         for layer_idx in selected_layers:
             key = f"block_{layer_idx}"
