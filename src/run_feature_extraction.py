@@ -62,8 +62,8 @@ def parse_args():
         type=str,
         default="/home/meconcelli/homeRepo/test-diffusion-model/models/sd3.5_large.safetensors",
     )
-    parser.add_argument("--real_images_path", type=str, required=True)
-    parser.add_argument("--fake_images_path", type=str, required=True)
+    parser.add_argument("--real_images_path", type=str, default=None, help="Path to real images (optional)")
+    parser.add_argument("--fake_images_path", type=str, default=None, help="Path to fake images (optional)")
     parser.add_argument("--output_path", type=str, default="features")
     parser.add_argument("--image_size", type=int, default=512)
     parser.add_argument("--timestep", type=int, default=0)
@@ -109,6 +109,11 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Validate: at least one path must be provided
+    if not args.real_images_path and not args.fake_images_path:
+        print("Error: At least one of --real_images_path or --fake_images_path must be provided.")
+        return
+
     # Seeding
     seed = 69
     torch.manual_seed(seed)
@@ -127,53 +132,62 @@ def main():
     validate_model_loading(model.diffusion_model, "MM-DiT")
     validate_model_loading(vae, "VAE")
 
-    # Extract Real
-    print(f"\nStarting extraction for REAL images (JPEG={bool(args.jpeg_aug_real)})...")
-    real_stats = extract_features(
-        images_dir=args.real_images_path,
-        output_dir=args.output_path,
-        category="real",
-        model=model,
-        vae=vae,
-        timestep=args.timestep,
-        layers_to_save=ATTENTION_LAYERS_TO_SAVE,
-        extract_attention=args.extract_attention,
-        num_images=args.num_images,
-        image_size=args.image_size,
-        simulate_low_res=args.simulate_low_res,
-        text_embedding_path=args.text_embedding_path,
-        text_embedding_prompt=args.text_embedding_prompt,
-        apply_mean=args.apply_mean,
-        preprocessing_mode=args.preprocessing_mode,
-        jpeg_aug=bool(args.jpeg_aug_real),
-        mean_pooling_only=args.mean_pooling_only,
-        device=device,
-        dtype=dtype,
-    )
+    real_stats = {}
+    fake_stats = {}
 
-    # Extract Fake
-    print(f"\nStarting extraction for FAKE images (JPEG={bool(args.jpeg_aug_fake)})...")
-    fake_stats = extract_features(
-        images_dir=args.fake_images_path,
-        output_dir=args.output_path,
-        category="fake",
-        model=model,
-        vae=vae,
-        timestep=args.timestep,
-        layers_to_save=ATTENTION_LAYERS_TO_SAVE,
-        extract_attention=args.extract_attention,
-        num_images=args.num_images,
-        image_size=args.image_size,
-        simulate_low_res=args.simulate_low_res,
-        text_embedding_path=args.text_embedding_path,
-        text_embedding_prompt=args.text_embedding_prompt,
-        apply_mean=args.apply_mean,
-        preprocessing_mode=args.preprocessing_mode,
-        jpeg_aug=bool(args.jpeg_aug_fake),
-        mean_pooling_only=args.mean_pooling_only,
-        device=device,
-        dtype=dtype,
-    )
+    # Extract Real (only if path provided)
+    if args.real_images_path:
+        print(f"\nStarting extraction for REAL images (JPEG={bool(args.jpeg_aug_real)})...")
+        real_stats = extract_features(
+            images_dir=args.real_images_path,
+            output_dir=args.output_path,
+            category="real",
+            model=model,
+            vae=vae,
+            timestep=args.timestep,
+            layers_to_save=ATTENTION_LAYERS_TO_SAVE,
+            extract_attention=args.extract_attention,
+            num_images=args.num_images,
+            image_size=args.image_size,
+            simulate_low_res=args.simulate_low_res,
+            text_embedding_path=args.text_embedding_path,
+            text_embedding_prompt=args.text_embedding_prompt,
+            apply_mean=args.apply_mean,
+            preprocessing_mode=args.preprocessing_mode,
+            jpeg_aug=bool(args.jpeg_aug_real),
+            mean_pooling_only=args.mean_pooling_only,
+            device=device,
+            dtype=dtype,
+        )
+    else:
+        print("\nSkipping REAL images (no path provided)")
+
+    # Extract Fake (only if path provided)
+    if args.fake_images_path:
+        print(f"\nStarting extraction for FAKE images (JPEG={bool(args.jpeg_aug_fake)})...")
+        fake_stats = extract_features(
+            images_dir=args.fake_images_path,
+            output_dir=args.output_path,
+            category="fake",
+            model=model,
+            vae=vae,
+            timestep=args.timestep,
+            layers_to_save=ATTENTION_LAYERS_TO_SAVE,
+            extract_attention=args.extract_attention,
+            num_images=args.num_images,
+            image_size=args.image_size,
+            simulate_low_res=args.simulate_low_res,
+            text_embedding_path=args.text_embedding_path,
+            text_embedding_prompt=args.text_embedding_prompt,
+            apply_mean=args.apply_mean,
+            preprocessing_mode=args.preprocessing_mode,
+            jpeg_aug=bool(args.jpeg_aug_fake),
+            mean_pooling_only=args.mean_pooling_only,
+            device=device,
+            dtype=dtype,
+        )
+    else:
+        print("\nSkipping FAKE images (no path provided)")
 
     # Update experiment data with shapes (taken from real stats if available, else fake)
     shapes = real_stats.get("shapes") or fake_stats.get("shapes")
