@@ -35,20 +35,20 @@ from utils.conditioning import create_empty_conditioning
 from utils.preprocessing import StandardPreprocessor
 
 
-# SD3.5 has 38 joint blocks (layers 0-37)
-# Default layers to save: first (0) and last layer
-# These are passed to extract_features() - modify here or override at call site
+# Default layers to save: first (0) and last layer (-1 = auto-detect from model)
+# The number of joint blocks varies by model (e.g., large=38, medium=24)
+# Use -1 to automatically save the last available layer
 
-# Image branch features (hidden_x) - 38 layers available (0-37)
-SELECTED_LAYERS_X = [0, 37]
+# Image branch features (hidden_x)
+SELECTED_LAYERS_X = [0, -1]
 
-# Text branch features (hidden_context) - 37 layers available (0-36)
-# Note: Layer 37 does NOT exist for context (pre_only=True in last joint block)
-SELECTED_LAYERS_CONTEXT = [0, 36]
+# Text branch features (hidden_context)
+# Note: The last joint block has pre_only=True, so context has one fewer layer
+SELECTED_LAYERS_CONTEXT = [0, -1]
 
-# Attention weights - uses same layer indexing as hidden_x (0-37)
+# Attention weights - uses same layer indexing as hidden_x
 # These only take effect if --extract_attention is enabled
-SELECTED_LAYERS_ATTENTION = [0, 37]
+SELECTED_LAYERS_ATTENTION = [0, -1]
 
 
 
@@ -271,6 +271,30 @@ def extract_features_from_image(
     return attention_weights
 
 
+def resolve_layer_indices(selected_layers, num_blocks, is_context=False):
+    """Resolve -1 sentinel values to actual last layer index.
+    
+    Args:
+        selected_layers: List of layer indices, where -1 means 'last available layer'.
+        num_blocks: Total number of joint blocks in the model.
+        is_context: If True, context branch has one fewer layer (last block is pre_only).
+    
+    Returns:
+        List of resolved layer indices.
+    """
+    if selected_layers is None:
+        return None
+    
+    last_idx = (num_blocks - 2) if is_context else (num_blocks - 1)
+    resolved = []
+    for idx in selected_layers:
+        if idx == -1:
+            resolved.append(last_idx)
+        else:
+            resolved.append(idx)
+    return resolved
+
+
 def aggregate_layer_features(
     features_dict, mean_pooling_only=False, selected_layers=None
 ):
@@ -280,8 +304,8 @@ def aggregate_layer_features(
         features_dict: Dictionary of layer_name -> tensor.
         mean_pooling_only: If True, apply spatial mean pooling to reduce tensor size.
                           Reduces [1, seq_len, dim] to [1, dim].
-        selected_layers: Optional list of layer indices to save (e.g., [0, 37] for first/last).
-                        If you want first/last layers, include them in this list.
+        selected_layers: Optional list of layer indices to save (e.g., [0, 23] for first/last).
+                        Use -1 for last available layer (resolved before calling this).
     """
     if not features_dict:
         return {}
@@ -291,6 +315,9 @@ def aggregate_layer_features(
 
     if num_layers == 0:
         return {}
+
+    # Determine the actual last layer index from the features
+    last_layer_idx = int(sorted_keys[-1].split("_")[1])
 
     def apply_pooling(tensor):
         """Apply spatial mean pooling if enabled."""
@@ -306,12 +333,14 @@ def aggregate_layer_features(
     stacked = torch.stack(all_tensors, dim=0)
     aggregated["middle_avg"] = apply_pooling(stacked.mean(dim=0))
 
-    # Add selected layers if specified (e.g., [0, 37] for first/last)
+    # Add selected layers if specified
     if selected_layers is not None:
         for layer_idx in selected_layers:
             key = f"block_{layer_idx}"
             if key in features_dict:
                 aggregated[f"layer_{layer_idx}"] = apply_pooling(features_dict[key])
+            else:
+                print(f"  Warning: layer block_{layer_idx} not found in features (available: {list(features_dict.keys())[:5]}...)")
 
     return aggregated
 
@@ -481,10 +510,23 @@ def extract_features(
     hooks = []
 
     # Attach hooks to all blocks
+    num_blocks = len(model.diffusion_model.joint_blocks)
+    print(f"Model has {num_blocks} joint blocks (layers 0-{num_blocks-1})")
     for i, block in enumerate(model.diffusion_model.joint_blocks):
         hook_fn = create_dual_feature_hook(features_x, features_context, f"block_{i}")
         h = block.register_forward_hook(hook_fn)
         hooks.append(h)
+
+    # Resolve -1 sentinel to actual last layer index
+    if selected_layers_x is not None:
+        selected_layers_x = resolve_layer_indices(selected_layers_x, num_blocks, is_context=False)
+        print(f"Selected layers (hidden_x): {selected_layers_x}")
+    if selected_layers_context is not None:
+        selected_layers_context = resolve_layer_indices(selected_layers_context, num_blocks, is_context=True)
+        print(f"Selected layers (hidden_context): {selected_layers_context}")
+    if selected_layers_attention is not None:
+        selected_layers_attention = resolve_layer_indices(selected_layers_attention, num_blocks, is_context=False)
+        print(f"Selected layers (attention): {selected_layers_attention}")
 
     stats = {"count": 0, "shapes": None}
 
