@@ -316,9 +316,6 @@ def aggregate_layer_features(
     if num_layers == 0:
         return {}
 
-    # Determine the actual last layer index from the features
-    last_layer_idx = int(sorted_keys[-1].split("_")[1])
-
     def apply_pooling(tensor):
         """Apply spatial mean pooling if enabled."""
         if mean_pooling_only and tensor.dim() == 3:
@@ -423,12 +420,11 @@ def extract_features(
     extract_attention=False,
     num_images=-1,
     image_size=512,
-    simulate_low_res=False,
     text_embedding_path=None,
     text_embedding_prompt="",
     apply_mean=True,
     preprocessing_mode="imagenet_style",
-    jpeg_aug=True,
+    jpeg_aug=False,
     mean_pooling_only=False,
     skip_context=False,
     selected_layers_x=None,
@@ -537,11 +533,6 @@ def extract_features(
         )
 
         model_sampling = ModelSamplingDiscreteFlow(shift=3.0)
-
-        if simulate_low_res:
-            print(
-                "WARNING: --simulate_low_res is deprecated. Using standard 'genimage_resize'."
-            )
 
         preprocessor = StandardPreprocessor(
             image_size=image_size, mode=preprocessing_mode, jpeg_aug=jpeg_aug
