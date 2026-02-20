@@ -39,19 +39,24 @@ def create_feature_hook(features_dict, name, output_index=1):
     return hook
 
 
-def create_dual_feature_hook(features_x, features_context, name):
+def create_dual_feature_hook(features_x, features_context, name, enabled_flag=None):
     """Create a hook that captures both image (x) and context features.
 
     Args:
         features_x: Dictionary for image features
         features_context: Dictionary for context features
         name: Base name for the features
+        enabled_flag: Optional list/mutable containing boolean [True/False] to enable/disable hook
 
     Returns:
         Hook function
     """
 
     def hook(model, input, output):
+        # Check enabled flag if provided
+        if enabled_flag is not None and not enabled_flag[0]:
+            return
+
         # The output of a JointBlock is a tuple (context, x)
         # output[1] = x = image features
         features_x[name] = output[1].detach().cpu()
@@ -71,15 +76,21 @@ def register_feature_hooks(model, features_x, features_context):
         features_context: Dictionary to store context features
 
     Returns:
-        List of hook handles
+        Tuple of (list of hook handles, enabled_flag)
     """
     handles = []
+    # Mutable flag to control all hooks: [True] = enabled
+    enabled_flag = [True]
+    
     print("Registering hooks on JointBlocks...")
     for i, block in enumerate(model.diffusion_model.joint_blocks):
-        hook_fn = create_dual_feature_hook(features_x, features_context, f"block_{i}")
+        hook_fn = create_dual_feature_hook(
+            features_x, features_context, f"block_{i}", enabled_flag
+        )
         handle = block.register_forward_hook(hook_fn)
         handles.append(handle)
-    return handles
+        
+    return handles, enabled_flag
 
 
 class AttentionCapture:

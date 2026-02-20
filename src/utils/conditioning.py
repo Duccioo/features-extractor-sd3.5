@@ -27,9 +27,11 @@ def get_context_dimensions(model):
         if hasattr(dm, "context_embedder"):
             ce = dm.context_embedder
             # For Linear, the expected input dim is in_features
+            # The context_embedder takes context as input, so in_features is the context_dim
             if hasattr(ce, "in_features"):
                 context_dim = ce.in_features
             elif hasattr(ce, "out_features"):
+                # Fallback only if in_features is missing (unlikely for Linear)
                 context_dim = ce.out_features
 
         if hasattr(dm, "y_embedder") and hasattr(dm.y_embedder, "in_features"):

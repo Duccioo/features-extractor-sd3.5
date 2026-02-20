@@ -40,7 +40,9 @@ class StandardPreprocessor:
         """
         Args:
             image_size: 1024 per SD3.5
-            mode: 'imagenet_style' (Resize Shortest Edge + Center Crop)
+            mode: 'imagenet_style' (Resize Shortest Edge + Center Crop),
+                'brutal_resize' (direct resize),
+                'crop_100_then_resize' (CenterCrop 100x100 + Resize to image_size)
             jpeg_aug: Se True, applica compressione JPEG on-the-fly.
         """
         self.image_size = image_size
@@ -76,6 +78,23 @@ class StandardPreprocessor:
                     interpolation=transforms.InterpolationMode.BICUBIC,
                     antialias=True,
                 )
+            )
+
+        elif self.mode == "crop_100_then_resize":
+            pipeline.append(transforms.CenterCrop((100, 100)))
+            pipeline.append(
+                transforms.Resize(
+                    self.image_size,
+                    interpolation=transforms.InterpolationMode.BICUBIC,
+                    antialias=True,
+                )
+            )
+            # pipeline.append(transforms.CenterCrop(self.image_size))
+
+        else:
+            raise ValueError(
+                f"Unsupported preprocessing mode: {self.mode}. "
+                "Valid options: imagenet_style, brutal_resize, crop_100_then_resize"
             )
 
         # 2. Corruption / Format Standardization

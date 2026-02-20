@@ -99,8 +99,8 @@ class ImageDataset(torch.utils.data.Dataset):
             image_tensor = self.transform(image)
             return image_tensor, image_path, True  # tensor, path, success
         except (OSError, IOError) as e:
-            # Return a dummy tensor for failed images
-            dummy = torch.zeros(3, 512, 512)
+            # Return a dummy tensor for failed images (empty, will be filtered)
+            dummy = torch.empty(0)
             return dummy, image_path, False
 
 
@@ -130,6 +130,7 @@ def extract_features_from_batch(
     timestep=0,
     extract_attention=False,
     conditioning=None,
+    enabled_flag=None,
 ):
     """Extract features from a batch of images.
 
@@ -175,14 +176,23 @@ def extract_features_from_batch(
         )
 
         if extract_attention:
-            with AttentionCapture(model) as attn_capture:
-                _ = model.apply_model(
-                    noised_latents,
-                    sigma.expand(batch_size),
-                    c_crossattn=context,
-                    y=y,
-                )
-                attention_weights.update(attn_capture.attention_weights)
+            # Disable hooks for attention pass to prevent overwriting features
+            if enabled_flag is not None:
+                enabled_flag[0] = False
+                
+            try:
+                with AttentionCapture(model) as attn_capture:
+                    _ = model.apply_model(
+                        noised_latents,
+                        sigma.expand(batch_size),
+                        c_crossattn=context,
+                        y=y,
+                    )
+                    attention_weights.update(attn_capture.attention_weights)
+            finally:
+                # Re-enable hooks
+                if enabled_flag is not None:
+                    enabled_flag[0] = True
 
     # Split features by batch index - features are stored with batch dimension
     results = []
@@ -217,8 +227,13 @@ def extract_features_from_image(
     timestep=0,
     extract_attention=False,
     conditioning=None,
+    enabled_flag=None,
 ):
-    """Extract features from a single image."""
+    """Extract features from a single image.
+    
+    Returns:
+        Tuple of (attention_weights, features_x, features_context)
+    """
     features_x.clear()
     features_context.clear()
 
@@ -259,16 +274,25 @@ def extract_features_from_image(
         )
 
         if extract_attention:
-            with AttentionCapture(model) as attn_capture:
-                _ = model.apply_model(
-                    noised_latents,
-                    sigma.expand(batch_size),
-                    c_crossattn=context,
-                    y=y,
-                )
-                attention_weights.update(attn_capture.attention_weights)
+            # Disable hooks for attention pass
+            if enabled_flag is not None:
+                enabled_flag[0] = False
+                
+            try:
+                with AttentionCapture(model) as attn_capture:
+                    _ = model.apply_model(
+                        noised_latents,
+                        sigma.expand(batch_size),
+                        c_crossattn=context,
+                        y=y,
+                    )
+                    attention_weights.update(attn_capture.attention_weights)
+            finally:
+                # Re-enable hooks
+                if enabled_flag is not None:
+                    enabled_flag[0] = True
 
-    return attention_weights
+    return attention_weights, features_x, features_context
 
 
 def resolve_layer_indices(selected_layers, num_blocks, is_context=False):
@@ -509,7 +533,24 @@ def extract_features(
     num_blocks = len(model.diffusion_model.joint_blocks)
     print(f"Model has {num_blocks} joint blocks (layers 0-{num_blocks-1})")
     for i, block in enumerate(model.diffusion_model.joint_blocks):
-        hook_fn = create_dual_feature_hook(features_x, features_context, f"block_{i}")
+        # We need the enabled_flag from register_feature_hooks. 
+        # But here we are calling create_dual_feature_hook manually?
+        # Ah, the user code earlier used register_feature_hooks in utils/features.py but here it seems to implement it inline?
+        # Wait, line 33 imports create_dual_feature_hook.
+        # Let's use register_feature_hooks from utils.features instead of this manual loop if possible, 
+        # OR just update this manual loop to match the new API.
+        # The file content at line 511 iterates over blocks. 
+        # I should just update this part to use the new create_dual_feature_hook signature.
+        pass
+    
+    # Actually, I should use the proper register_feature_hooks from utils if I can, but the import at line 33 is:
+    # from utils.features import create_dual_feature_hook, AttentionCapture
+    # It does NOT import register_feature_hooks. 
+    # To minimize changes, I will just update the manual registration here.
+    
+    enabled_flag = [True]
+    for i, block in enumerate(model.diffusion_model.joint_blocks):
+        hook_fn = create_dual_feature_hook(features_x, features_context, f"block_{i}", enabled_flag)
         h = block.register_forward_hook(hook_fn)
         hooks.append(h)
 
@@ -598,6 +639,7 @@ def extract_features(
                         timestep,
                         extract_attention,
                         conditioning,
+                        enabled_flag,
                     )
 
                     # Process each image's results
@@ -678,6 +720,8 @@ def extract_features(
                             stats["shapes"] = first_image_shapes
 
                     # Aggressive memory cleanup after each batch
+                    features_x.clear()
+                    features_context.clear()
                     gc.collect()
                     torch.cuda.empty_cache()
                 
@@ -698,7 +742,7 @@ def extract_features(
             # Original single-image processing
             for image_path in tqdm(images, desc=f"Extracting {category}"):
                 try:
-                    attn_weights = extract_features_from_image(
+                    attn_weights, _, _ = extract_features_from_image(
                         image_path,
                         model,
                         vae,
@@ -711,6 +755,7 @@ def extract_features(
                         timestep,
                         extract_attention,
                         conditioning,
+                        enabled_flag,
                     )
 
                     # Aggregate

@@ -87,7 +87,7 @@ def parse_args():
         "--preprocessing_mode",
         type=str,
         default="imagenet_style",
-        help="Preprocessing mode (imagenet_style, etc.)",
+        help="Preprocessing mode (imagenet_style, brutal_resize, crop_100_then_resize)",
     )
     # JPEG augmentation controls (using int 0/1 for explicit control)
     parser.add_argument(
