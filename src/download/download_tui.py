@@ -134,6 +134,23 @@ def download_tiny_genimage_interactive():
         console.print(f"\n[green]✅ Download Tiny GenImage completato![/green] File in: {output_dir}")
 
 
+def download_openfake_interactive():
+    """Launch OpenFake dataset download TUI."""
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from download_openfake import interactive_mode, _check_tui_deps
+
+    if not _check_tui_deps():
+        console.print(
+            "[red]❌ Pacchetti mancanti per la TUI. "
+            "Installa con: pip install rich questionary[/red]"
+        )
+        return
+
+    result = interactive_mode()
+    if result is None:
+        console.print("[yellow]Download annullato.[/yellow]")
+
+
 def main_menu():
     """Main TUI menu."""
     console.print(Panel.fit(
@@ -145,6 +162,7 @@ def main_menu():
     choices = [
         questionary.Choice("📦 Scarica Modelli SD3.5 (HuggingFace)", value="models"),
         questionary.Choice("📊 Scarica Tiny GenImage Dataset (Kaggle)", value="tiny_genimage"),
+        questionary.Choice("🔍 Scarica OpenFake Dataset (HuggingFace)", value="openfake"),
         questionary.Choice("❌ Esci", value="exit"),
     ]
     
@@ -157,6 +175,8 @@ def main_menu():
         download_models_interactive()
     elif action == "tiny_genimage":
         download_tiny_genimage_interactive()
+    elif action == "openfake":
+        download_openfake_interactive()
     elif action == "exit" or action is None:
         console.print("[dim]Arrivederci![/dim]")
         return 0
@@ -179,7 +199,7 @@ def main():
     )
     parser.add_argument(
         "--dataset", "-d",
-        choices=["tiny_genimage"],
+        choices=["tiny_genimage", "openfake"],
         help="Avvia direttamente il download di un dataset",
     )
     
@@ -190,6 +210,9 @@ def main():
         return 0
     elif args.dataset == "tiny_genimage":
         download_tiny_genimage_interactive()
+        return 0
+    elif args.dataset == "openfake":
+        download_openfake_interactive()
         return 0
     else:
         return main_menu()
