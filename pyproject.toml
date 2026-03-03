@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sd35-feature-extractor"
+version = "1.0.0"
+description = "Extract internal features (hidden states and attention maps) from Stable Diffusion 3.5 for research."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Marco Meconcelli"},
+]
+keywords = ["stable-diffusion", "feature-extraction", "deepfake-detection", "diffusion-models"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "einops>=0.8",
+    "numpy",
+    "pillow>=10.0",
+    "safetensors>=0.4",
+    "tqdm>=4.60",
+    "transformers>=4.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "mypy",
+]
+download = [
+    "huggingface-hub>=0.20",
+    "kaggle",
+]
+
+[project.scripts]
+sd35-extract = "sd35_extractor.run_feature_extraction:main"
+
+[project.urls]
+Repository = "https://github.com/Duccioo/features-extractor-sd3.5"
+
+# Map the "src" directory to the "sd35_extractor" package name.
+# This allows `import sd35_extractor` to resolve to the `src/` folder,
+# so we don't need to rename any existing files.
+[tool.setuptools.package-dir]
+sd35_extractor = "src"
+"sd35_extractor.utils" = "src/utils"
+"sd35_extractor.download" = "src/download"

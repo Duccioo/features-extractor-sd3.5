@@ -21,18 +21,33 @@ This repository contains tools and scripts to extract internal features from Sta
 
 Before using this code, you must set up the environment and download the necessary dependencies.
 
-### 1️⃣ Download Stable Diffusion 3.5 Code
-This repository depends on the official Stable Diffusion 3.5 implementation. You must download the code from Stability AI.
+### 1️⃣ Clone with Submodules
+The official Stable Diffusion 3.5 code is included as a **git submodule**.
 
-1.  Go to the root of this repository.
-2.  Clone the `sd3.5` repository:
-    ```bash
-    git clone https://github.com/Stability-AI/sd3.5
-    ```
-    **Note:** The scripts expect the `sd3.5` folder to be located in the root directory of this project (alongside `src`, `LICENSE`, etc.).
+```bash
+git clone --recurse-submodules https://github.com/Duccioo/features-extractor-sd3.5.git
+cd features-extractor-sd3.5
+```
 
-### 2️⃣ Install Dependencies
-- Install the required Python libraries:
+If you already cloned without `--recurse-submodules`:
+```bash
+git submodule update --init --recursive
+```
+
+### 2️⃣ Install
+
+**Option A — pip install (recommended for reuse in other projects):**
+```bash
+pip install .
+```
+This installs the package as `sd35-feature-extractor` and provides the `sd35-extract` CLI command.
+
+**Option B — editable install (for development):**
+```bash
+pip install -e .
+```
+
+**Option C — requirements only:**
 ```bash
 pip install -r requirements.txt
 ```
@@ -55,8 +70,16 @@ python src/download/download_models.py
 ### 🔍 Feature Extraction
 The main entry point for extracting features is `src/run_feature_extraction.py`. This script processes two directories of images (Real and Fake) and extracts features for analysis.
 
-**Basic Usage:**
+**Via CLI script (after pip install):**
+```bash
+sd35-extract \
+    --model_path models/sd3.5_large.safetensors \
+    --real_images_path path/to/real/images \
+    --fake_images_path path/to/fake/images \
+    --output_path output_features
+```
 
+**Or directly with Python:**
 ```bash
 python src/run_feature_extraction.py \
     --model_path models/sd3.5_large.safetensors \
@@ -66,14 +89,27 @@ python src/run_feature_extraction.py \
 ```
 
 **🔧 Key Arguments:**
--   `--model_path`: Path to the downloaded model checkpoint (`.safetensors`).
+-   `--model_path` **(required)**: Path to the downloaded model checkpoint (`.safetensors`).
 -   `--real_images_path`: Folder containing the real images.
 -   `--fake_images_path`: Folder containing the fake/generated images.
 -   `--output_path`: Destination folder for extracted features.
+-   `--seed`: Random seed for reproducibility (default: 69).
 -   `--extract_attention`: Optional. Add this flag to extract attention maps (WARNING: uses significant disk space).
 -   `--image_size`: Resolution to resize images (default: 512).
 -   `--num_images`: Limit the number of images to process (-1 for all).
 -   `--mean_pooling_only`: Optional. Apply spatial mean pooling to reduce feature size from `[1, seq_len, dim]` to `[1, dim]`, significantly reducing disk space usage.
+
+**📦 Programmatic Usage (from another project):**
+```python
+from sd35_extractor.extract_features import extract_features
+
+stats = extract_features(
+    images_dir="path/to/images",
+    output_dir="output_features",
+    category="real",
+    model_path="models/sd3.5_large.safetensors",
+)
+```
 
 ### 🛠️ Other Tools
 

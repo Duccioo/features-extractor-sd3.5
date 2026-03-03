@@ -143,6 +143,21 @@ class AttentionCapture:
                 raise ImportError("other_impls or mmditx not available - check sd3.5 path")
 
             original_attention = other_impls.attention
+
+            # Validate that the upstream attention() signature hasn't changed.
+            # Our capturing_attention must be a drop-in replacement with the
+            # same (q, k, v, heads, mask=None) signature.
+            import inspect
+            sig = inspect.signature(original_attention)
+            expected_params = ["q", "k", "v", "heads", "mask"]
+            actual_params = list(sig.parameters.keys())
+            if actual_params != expected_params:
+                raise RuntimeError(
+                    f"[AttentionCapture] Upstream attention() signature changed! "
+                    f"Expected params {expected_params}, got {actual_params}. "
+                    f"The monkey-patch is no longer safe — please update AttentionCapture."
+                )
+
             captured_attentions = []
 
             def capturing_attention(q, k, v, heads, mask=None):
@@ -164,8 +179,8 @@ class AttentionCapture:
                 attn_weights_softmax = torch.softmax(attn_weights, dim=-1)
 
                 if torch.isnan(attn_weights_softmax).any():
-                    print(
-                        "[AttentionCapture] Warning: NaNs detected in attention weights"
+                    raise ValueError(
+                        "[AttentionCapture] NaNs detected in attention weights. Image will be skipped."
                     )
 
                 # Store mean attention over heads (head averaging saves memory)

@@ -65,7 +65,8 @@ def parse_args():
     parser.add_argument(
         "--model_path",
         type=str,
-        default="/home/meconcelli/homeRepo/test-diffusion-model/models/sd3.5_large.safetensors",
+        required=True,
+        help="Path to sd3.5 model checkpoint (e.g., models/sd3.5_large.safetensors)",
     )
     parser.add_argument("--real_images_path", type=str, default=None, help="Path to real images (optional)")
     parser.add_argument("--fake_images_path", type=str, default=None, help="Path to fake images (optional)")
@@ -108,6 +109,12 @@ def parse_args():
         default=False,
         help="Apply spatial mean pooling to reduce feature size from [1, seq_len, dim] to [1, dim]",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=69,
+        help="Random seed for reproducibility",
+    )
     return parser.parse_args()
 
 
@@ -120,7 +127,7 @@ def main():
         return
 
     # Seeding
-    seed = 69
+    seed = args.seed
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
@@ -139,6 +146,7 @@ def main():
 
     real_stats = {}
     fake_stats = {}
+    all_skipped_images = []
 
     # Extract Real (only if path provided)
     if args.real_images_path:
@@ -166,6 +174,8 @@ def main():
             device=device,
             dtype=dtype,
         )
+        if "skipped_images" in real_stats:
+            all_skipped_images.extend(real_stats["skipped_images"])
     else:
         print("\nSkipping REAL images (no path provided)")
 
@@ -195,6 +205,8 @@ def main():
             device=device,
             dtype=dtype,
         )
+        if "skipped_images" in fake_stats:
+            all_skipped_images.extend(fake_stats["skipped_images"])
     else:
         print("\nSkipping FAKE images (no path provided)")
 
@@ -202,6 +214,10 @@ def main():
     shapes = real_stats.get("shapes") or fake_stats.get("shapes")
     if shapes:
         experiment_data["feature_shapes"] = shapes
+        
+    if all_skipped_images:
+        experiment_data["skipped_images"] = all_skipped_images
+        print(f"\nWarning: {len(all_skipped_images)} images were skipped due to errors.")
 
     finalize_experiment(experiment_data, args.output_path)
 

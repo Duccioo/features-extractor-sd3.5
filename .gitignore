@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 
 models/
-sd3.5/
 data/
 output/
 OUTPUT/
