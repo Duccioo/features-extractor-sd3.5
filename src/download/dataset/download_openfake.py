@@ -48,19 +48,28 @@ import sys
 from pathlib import Path
 
 try:
-    from openfake_config import (
+    from openfake_utils.openfake_config import (
         DATASET_SIZE, PAPER_URL, TRAIN_EXAMPLES, TEST_EXAMPLES, KNOWN_MODELS,
     )
-    from openfake_download import download_openfake
-    from openfake_verify import verify_dataset, list_available_models
-    from openfake_tui import check_tui_deps, interactive_mode
+    from openfake_utils.openfake_download import download_openfake
+    from openfake_utils.openfake_verify import verify_dataset, list_available_models
+    from openfake_utils.openfake_tui import check_tui_deps, interactive_mode
 except ImportError:
-    from .openfake_config import (
-        DATASET_SIZE, PAPER_URL, TRAIN_EXAMPLES, TEST_EXAMPLES, KNOWN_MODELS,
-    )
-    from .openfake_download import download_openfake
-    from .openfake_verify import verify_dataset, list_available_models
-    from .openfake_tui import check_tui_deps, interactive_mode
+    try:
+        from .openfake_utils.openfake_config import (
+            DATASET_SIZE, PAPER_URL, TRAIN_EXAMPLES, TEST_EXAMPLES, KNOWN_MODELS,
+        )
+        from .openfake_download import download_openfake
+        from .openfake_utils.openfake_verify import verify_dataset, list_available_models
+        from .openfake_utils.openfake_tui import check_tui_deps, interactive_mode
+    except ImportError:
+        # Fallback for when running directly and imports are flat (e.g. if files were moved)
+        from openfake_config import (
+            DATASET_SIZE, PAPER_URL, TRAIN_EXAMPLES, TEST_EXAMPLES, KNOWN_MODELS,
+        )
+        from openfake_download import download_openfake
+        from openfake_verify import verify_dataset, list_available_models
+        from openfake_tui import check_tui_deps, interactive_mode
 
 
 def print_download_instructions() -> None:
