@@ -13,6 +13,7 @@ from PIL import Image, ImageFile
 from tqdm import tqdm
 import gc
 import traceback
+from safetensors.torch import save_file as safetensors_save, load_file as safetensors_load
 
 
 # Do NOT allow loading truncated images - fail fast on corrupted files
@@ -55,19 +56,11 @@ SELECTED_LAYERS_ATTENTION = [0, -1]
 def setup_output_directories_for_category(
     output_path, category, extract_attention=False, skip_context=False
 ):
-    """Create output directory structure for features specific to a category."""
-    os.makedirs(output_path, exist_ok=True)
-
-    # Hidden features (x) - image branch
-    os.makedirs(os.path.join(output_path, "hidden_x", category), exist_ok=True)
-    # Hidden features (context) - text branch
-    if not skip_context:
-        os.makedirs(
-            os.path.join(output_path, "hidden_context", category), exist_ok=True
-        )
-    # Attention weights
-    if extract_attention:
-        os.makedirs(os.path.join(output_path, "attention", category), exist_ok=True)
+    """Create output directory structure for features specific to a category.
+    
+    New format: single directory per category, one .safetensors file per image.
+    """
+    os.makedirs(os.path.join(output_path, category), exist_ok=True)
 
 
 def collect_images(images_path, num_images=-1):
@@ -424,13 +417,63 @@ def aggregate_attention_features(
     return aggregated
 
 
-def save_features(features_dict, output_path, feature_type, category, image_name):
-    """Save extracted features to disk."""
-    for name, tensor in features_dict.items():
-        save_path = os.path.join(
-            output_path, feature_type, category, f"{image_name}_{name}.pt"
-        )
-        torch.save(tensor, save_path)
+def save_all_features(agg_x, agg_ctx, agg_attn, output_path, category, image_name):
+    """Save all extracted features for one image into a single .safetensors file.
+    
+    Keys are namespaced: 'hidden_x__middle_avg', 'hidden_context__layer_0', 
+    'attention__layer_0_joint', etc.
+    """
+    all_tensors = {}
+    
+    # Hidden X features
+    for name, tensor in agg_x.items():
+        all_tensors[f"hidden_x__{name}"] = tensor
+    
+    # Hidden Context features
+    if agg_ctx:
+        for name, tensor in agg_ctx.items():
+            all_tensors[f"hidden_context__{name}"] = tensor
+    
+    # Attention features
+    if agg_attn:
+        for name, tensor in agg_attn.items():
+            all_tensors[f"attention__{name}"] = tensor
+    
+    if not all_tensors:
+        return
+    
+    save_path = os.path.join(output_path, category, f"{image_name}.safetensors")
+    safetensors_save(all_tensors, save_path)
+
+
+def load_features(filepath):
+    """Load features from a .safetensors file.
+    
+    Returns a dict with three sub-dicts: 'hidden_x', 'hidden_context', 'attention'.
+    Each sub-dict maps feature names (e.g. 'middle_avg', 'layer_0') to tensors.
+    
+    Example:
+        features = load_features("output/real/image001.safetensors")
+        hidden_x_avg = features['hidden_x']['middle_avg']  # [1, 1024, 1536]
+        ctx_layer_0 = features['hidden_context']['layer_0']  # [1, 154, 1536]
+    """
+    raw = safetensors_load(filepath)
+    
+    result = {'hidden_x': {}, 'hidden_context': {}, 'attention': {}}
+    for key, tensor in raw.items():
+        # Keys are like 'hidden_x__middle_avg', 'attention__layer_0_joint'
+        parts = key.split('__', 1)
+        if len(parts) == 2:
+            group, name = parts
+            if group in result:
+                result[group][name] = tensor
+            else:
+                result[group] = {name: tensor}
+        else:
+            # Fallback for unexpected keys
+            result[key] = tensor
+    
+    return result
 
 
 def extract_features(
@@ -671,21 +714,9 @@ def extract_features(
                             agg_ctx.pop("middle_avg", None)
 
                         image_name = os.path.splitext(os.path.basename(image_path))[0]
-                        save_features(
-                            agg_x, output_dir, "hidden_x", category, image_name
-                        )
-                        if not skip_context:
-                            save_features(
-                                agg_ctx,
-                                output_dir,
-                                "hidden_context",
-                                category,
-                                image_name,
-                            )
 
                         agg_attn = None
                         if extract_attention:
-                            # Use selected_layers_attention if provided, else fall back to layers_to_save
                             attn_layers = selected_layers_attention
                             agg_attn = aggregate_attention_features(
                                 per_image_attn,
@@ -698,9 +729,12 @@ def extract_features(
                                     for k, v in agg_attn.items()
                                     if "middle_avg" not in k
                                 }
-                            save_features(
-                                agg_attn, output_dir, "attention", category, image_name
-                            )
+
+                        # Save all features in a single .safetensors file
+                        save_all_features(
+                            agg_x, agg_ctx, agg_attn,
+                            output_dir, category, image_name
+                        )
 
                         # Capture shapes from first image
                         if first_image_shapes is None:
@@ -780,15 +814,9 @@ def extract_features(
                         agg_ctx.pop("middle_avg", None)
 
                     image_name = os.path.splitext(os.path.basename(image_path))[0]
-                    save_features(agg_x, output_dir, "hidden_x", category, image_name)
-                    if not skip_context:
-                        save_features(
-                            agg_ctx, output_dir, "hidden_context", category, image_name
-                        )
 
                     agg_attn = None
                     if extract_attention:
-                        # Use selected_layers_attention if provided, else fall back to layers_to_save
                         attn_layers = selected_layers_attention
                         agg_attn = aggregate_attention_features(
                             attn_weights,
@@ -796,15 +824,17 @@ def extract_features(
                             mean_pooling_only=mean_pooling_only,
                         )
                         if not apply_mean:
-                            # Remove middle_avg keys
                             agg_attn = {
                                 k: v
                                 for k, v in agg_attn.items()
                                 if "middle_avg" not in k
                             }
-                        save_features(
-                            agg_attn, output_dir, "attention", category, image_name
-                        )
+
+                    # Save all features in a single .safetensors file
+                    save_all_features(
+                        agg_x, agg_ctx, agg_attn,
+                        output_dir, category, image_name
+                    )
 
                     # Capture shapes from first image
                     if first_image_shapes is None:
