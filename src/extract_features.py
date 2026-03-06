@@ -427,17 +427,17 @@ def save_all_features(agg_x, agg_ctx, agg_attn, output_path, category, image_nam
     
     # Hidden X features
     for name, tensor in agg_x.items():
-        all_tensors[f"hidden_x__{name}"] = tensor
+        all_tensors[f"hidden_x__{name}"] = tensor.contiguous()
     
     # Hidden Context features
     if agg_ctx:
         for name, tensor in agg_ctx.items():
-            all_tensors[f"hidden_context__{name}"] = tensor
+            all_tensors[f"hidden_context__{name}"] = tensor.contiguous()
     
     # Attention features
     if agg_attn:
         for name, tensor in agg_attn.items():
-            all_tensors[f"attention__{name}"] = tensor
+            all_tensors[f"attention__{name}"] = tensor.contiguous()
     
     if not all_tensors:
         return
