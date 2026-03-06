@@ -195,7 +195,9 @@ def interactive_mode():
         summary_table.add_row("Modelli", ", ".join(conf["models"]) if conf["models"] else "tutti (20+)")
         summary_table.add_row("Limite globale", str(conf["limit"]) if conf["limit"] else "illimitato")
         summary_table.add_row("Limite/modello", str(conf["limit_per_model"]) if conf["limit_per_model"] else "illimitato")
-        summary_table.add_row("Limite REAL", str(conf["limit_real"]) if conf["limit_real"] is not None else "come limite/modello")
+        
+        real_limit_str = "Tutte (massimo)" if conf["limit_real"] == -1 else (str(conf["limit_real"]) if conf["limit_real"] is not None else "come limite/modello")
+        summary_table.add_row("Limite REAL", real_limit_str)
     else:
         for s in splits:
             conf = split_configs[s]
@@ -204,7 +206,9 @@ def interactive_mode():
             summary_table.add_row("  Modelli", f"{len(conf['models'])} selezionati" if conf["models"] else "tutti")
             summary_table.add_row("  Limite glob.", str(conf["limit"]) if conf["limit"] else "illimitato")
             summary_table.add_row("  Limite/mod.", str(conf["limit_per_model"]) if conf["limit_per_model"] else "illimitato")
-            summary_table.add_row("  Limite REAL", str(conf["limit_real"]) if conf["limit_real"] is not None else "come limite/modello")
+            
+            real_limit_str = "Tutte (massimo)" if conf["limit_real"] == -1 else (str(conf["limit_real"]) if conf["limit_real"] is not None else "come limite/modello")
+            summary_table.add_row("  Limite REAL", real_limit_str)
 
     summary_table.add_row("Shuffle", "Sì" if use_shuffle else "No")
     summary_table.add_row("Formato", img_format)
@@ -220,7 +224,7 @@ def interactive_mode():
             n_models = len(conf["models"]) if conf["models"] else len(KNOWN_MODELS)
             est_fake = (conf["limit_per_model"] or (TRAIN_EXAMPLES if s == "train" else TEST_EXAMPLES)) * n_models
             if conf["limit_real"] is not None:
-                est_real = conf["limit_real"]
+                est_real = 60_000 if conf["limit_real"] == -1 else conf["limit_real"]
             else:
                 est_real = conf["limit_per_model"] or (TRAIN_EXAMPLES if s == "train" else TEST_EXAMPLES)
             est_images += (est_fake + est_real)
@@ -352,6 +356,7 @@ def _configure_split(console, custom_style, questionary, label: str) -> dict | N
                 questionary.Choice("Uguale al limite per modello", value="same"),
                 questionary.Choice("Bilanciato (somma di tutti i modelli fake)", value="balanced"),
                 questionary.Choice("Numero personalizzato", value="custom"),
+                questionary.Choice("Massimo (tutte le immagini reali presenti)", value="max"),
             ],
             style=custom_style,
         ).ask()
@@ -368,6 +373,8 @@ def _configure_split(console, custom_style, questionary, label: str) -> dict | N
             if custom_real_str is None:
                 return None
             lim_real = int(custom_real_str) if custom_real_str.strip() else None
+        elif real_mode == "max":
+            lim_real = -1
 
     return {
         "labels": l_filter,

@@ -26,13 +26,13 @@ sys.path.insert(0, os.path.join(_repo_root, "sd3.5"))
 
 # ---
 # Load precomputed text embeddings when provided
-from extract_text_embedding import load_text_embeddings
+from .extract_text_embedding import load_text_embeddings
 
 from sd3_impls import SD3LatentFormat, ModelSamplingDiscreteFlow
-from utils.model import load_sd35_model, validate_model_loading
-from utils.features import create_dual_feature_hook, AttentionCapture
-from utils.conditioning import create_empty_conditioning
-from utils.preprocessing import StandardPreprocessor
+from .utils.model import load_sd35_model, validate_model_loading
+from .utils.features import create_dual_feature_hook, AttentionCapture
+from .utils.conditioning import create_empty_conditioning
+from .utils.preprocessing import StandardPreprocessor
 
 
 # Default layers to save: first (0) and last layer (-1 = auto-detect from model)
@@ -532,21 +532,6 @@ def extract_features(
     # Attach hooks to all blocks
     num_blocks = len(model.diffusion_model.joint_blocks)
     print(f"Model has {num_blocks} joint blocks (layers 0-{num_blocks-1})")
-    for i, block in enumerate(model.diffusion_model.joint_blocks):
-        # We need the enabled_flag from register_feature_hooks. 
-        # But here we are calling create_dual_feature_hook manually?
-        # Ah, the user code earlier used register_feature_hooks in utils/features.py but here it seems to implement it inline?
-        # Wait, line 33 imports create_dual_feature_hook.
-        # Let's use register_feature_hooks from utils.features instead of this manual loop if possible, 
-        # OR just update this manual loop to match the new API.
-        # The file content at line 511 iterates over blocks. 
-        # I should just update this part to use the new create_dual_feature_hook signature.
-        pass
-    
-    # Actually, I should use the proper register_feature_hooks from utils if I can, but the import at line 33 is:
-    # from utils.features import create_dual_feature_hook, AttentionCapture
-    # It does NOT import register_feature_hooks. 
-    # To minimize changes, I will just update the manual registration here.
     
     enabled_flag = [True]
     for i, block in enumerate(model.diffusion_model.joint_blocks):
