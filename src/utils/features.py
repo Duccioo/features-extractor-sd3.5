@@ -34,7 +34,7 @@ def create_feature_hook(features_dict, name, output_index=1):
         # For JointBlock: output is (context, x)
         # output[1] = x = image features
         # output[0] = context = text features
-        features_dict[name] = output[output_index].detach().cpu()
+        features_dict[name] = output[output_index].detach().cpu().to(torch.float16)
 
     return hook
 
@@ -59,10 +59,10 @@ def create_dual_feature_hook(features_x, features_context, name, enabled_flag=No
 
         # The output of a JointBlock is a tuple (context, x)
         # output[1] = x = image features
-        features_x[name] = output[1].detach().cpu()
+        features_x[name] = output[1].detach().cpu().to(torch.float16)
         # Also save context if available
         if output[0] is not None:
-            features_context[name] = output[0].detach().cpu()
+            features_context[name] = output[0].detach().cpu().to(torch.float16)
 
     return hook
 
