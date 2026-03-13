@@ -250,7 +250,7 @@ def _scan_metadata_parallel(
                             continue
 
                         cur_limit = limit_per_model if label == "fake" else eff_limit_real
-                        if cur_limit and counts[count_key] >= cur_limit:
+                        if cur_limit and cur_limit > 0 and counts[count_key] >= cur_limit:
                             completed.add(count_key)
                             continue
 
@@ -317,7 +317,7 @@ def _build_plan(
             # Labels/models filtering already done in the thread, but
             # we still need to enforce limits
             current_limit = limit_per_model if label == "fake" else eff_limit_real
-            if current_limit and counts[count_key] >= current_limit:
+            if current_limit and current_limit > 0 and counts[count_key] >= current_limit:
                 completed.add(count_key)
                 skipped_limit += 1
                 continue
@@ -674,7 +674,9 @@ def download_openfake(
         print(f"   🤖 Model filter:     {models_filter or 'tutti'}")
         print(f"   📊 Limite globale:   {limit or 'nessuno'}")
         print(f"   📊 Limite/modello:   {limit_per_model or 'nessuno'}")
-        print(f"   📊 Limite real:      {limit_real or 'come limite/modello'}")
+        
+        real_limit_str = 'Tutte (massimo)' if limit_real == -1 else (limit_real or 'come limite/modello')
+        print(f"   📊 Limite real:      {real_limit_str}")
         print(f"   🖼️  Formato:          {img_format}")
         print()
 
