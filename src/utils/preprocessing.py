@@ -12,6 +12,23 @@ def convert_rgb_fn(img):
     return img.convert("RGB")
 
 
+class CropToMultipleOf32:
+    """Crops the image to the closest multiple of 32 to prevent SD3.5 tensor dimension mismatch."""
+    def __call__(self, img):
+        w, h = img.size
+        new_w = w - (w % 32)
+        new_h = h - (h % 32)
+        if new_w == w and new_h == h:
+            return img
+        
+        # Center crop the image slightly
+        left = (w - new_w) // 2
+        top = (h - new_h) // 2
+        right = left + new_w
+        bottom = top + new_h
+        return img.crop((left, top, right, bottom))
+
+
 class RobustJPEGTransform:
     """Applica compressione JPEG random per mitigare il bias di formato PNG/JPEG."""
 
@@ -43,7 +60,8 @@ class StandardPreprocessor:
             mode: 'imagenet_style' (Resize Shortest Edge + Center Crop),
                 'brutal_resize' (direct resize),
                 'crop_100_then_resize' (CenterCrop 100x100 + Resize to image_size),
-                'none' (No resize or crop)
+                'none' (No resize or crop),
+                'closest_multiple_of_32' (Center crop imperceptibly to nearest multiple of 32)
             jpeg_aug: Se True, applica compressione JPEG on-the-fly.
         """
         self.image_size = image_size
@@ -94,11 +112,14 @@ class StandardPreprocessor:
 
         elif self.mode == "none":
             pass  # Nessun resize né crop
+            
+        elif self.mode == "closest_multiple_of_32":
+            pipeline.append(CropToMultipleOf32())
 
         else:
             raise ValueError(
                 f"Unsupported preprocessing mode: {self.mode}. "
-                "Valid options: imagenet_style, brutal_resize, crop_100_then_resize, none"
+                "Valid options: imagenet_style, brutal_resize, crop_100_then_resize, none, closest_multiple_of_32"
             )
 
         # 2. Corruption / Format Standardization

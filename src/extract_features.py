@@ -89,6 +89,14 @@ class ImageDataset(torch.utils.data.Dataset):
         image_path = self.image_paths[idx]
         try:
             image = Image.open(image_path).convert("RGB")
+            
+            # Prevent OOM for very large images (> 4K size)
+            w, h = image.size
+            if max(w, h) > 4096 or w * h > 3840 * 2160:
+                print(f"\nSkipping {os.path.basename(image_path)}: image too large ({w}x{h}) - OOM prevention")
+                dummy = torch.empty(0)
+                return dummy, image_path, False
+
             image_tensor = self.transform(image)
             return image_tensor, image_path, True  # tensor, path, success
         except (OSError, IOError) as e:
@@ -231,6 +239,12 @@ def extract_features_from_image(
     features_context.clear()
 
     image = Image.open(image_path).convert("RGB")
+    
+    # Prevent OOM
+    w, h = image.size
+    if max(w, h) > 4096 or w * h > 3840 * 2160:
+        raise ValueError(f"Image too large ({w}x{h}) for extraction - skipping to prevent OOM")
+
     image_tensor = transform(image).unsqueeze(0).to(device, dtype)
 
     attention_weights = {}
