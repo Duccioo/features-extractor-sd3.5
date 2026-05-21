@@ -27,13 +27,13 @@ sys.path.insert(0, os.path.join(_repo_root, "sd3.5"))
 
 # ---
 # Load precomputed text embeddings when provided
-from .extract_text_embedding import load_text_embeddings
+from extract_text_embedding import load_text_embeddings
 
 from sd3_impls import SD3LatentFormat, ModelSamplingDiscreteFlow
-from .utils.model import load_sd35_model, validate_model_loading
-from .utils.features import create_dual_feature_hook, AttentionCapture
-from .utils.conditioning import create_empty_conditioning
-from .utils.preprocessing import StandardPreprocessor
+from utils.model import load_sd35_model, validate_model_loading
+from utils.features import create_dual_feature_hook, AttentionCapture
+from utils.conditioning import create_empty_conditioning
+from utils.preprocessing import StandardPreprocessor
 
 
 # Default layers to save: first (0) and last layer (-1 = auto-detect from model)
