@@ -14,14 +14,41 @@ def convert_rgb_fn(img):
 
 class CropToMultipleOf32:
     """Crops the image to the closest multiple of 32 to prevent SD3.5 tensor dimension mismatch."""
+
     def __call__(self, img):
         w, h = img.size
         new_w = w - (w % 32)
         new_h = h - (h % 32)
         if new_w == w and new_h == h:
             return img
-        
+
         # Center crop the image slightly
+        left = (w - new_w) // 2
+        top = (h - new_h) // 2
+        right = left + new_w
+        bottom = top + new_h
+        return img.crop((left, top, right, bottom))
+
+
+class SafeResizeToMax1152:
+    """Resizes the image if any dimension exceeds 1152, maintaining aspect ratio.
+    Then crops to nearest multiple of 32."""
+
+    def __call__(self, img):
+        w, h = img.size
+        max_dim = max(w, h)
+        if max_dim > 1152:
+            scale = 1152 / max_dim
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = img.resize((new_w, new_h), Image.Resampling.BICUBIC)
+
+        # Now apply the multiple of 32 crop logic
+        w, h = img.size
+        new_w = w - (w % 32)
+        new_h = h - (h % 32)
+        if new_w == w and new_h == h:
+            return img
+
         left = (w - new_w) // 2
         top = (h - new_h) // 2
         right = left + new_w
@@ -112,14 +139,17 @@ class StandardPreprocessor:
 
         elif self.mode == "none":
             pass  # Nessun resize né crop
-            
+
         elif self.mode == "closest_multiple_of_32":
             pipeline.append(CropToMultipleOf32())
+
+        elif self.mode == "safe_resize_1152":
+            pipeline.append(SafeResizeToMax1152())
 
         else:
             raise ValueError(
                 f"Unsupported preprocessing mode: {self.mode}. "
-                "Valid options: imagenet_style, brutal_resize, crop_100_then_resize, none, closest_multiple_of_32"
+                "Valid options: imagenet_style, brutal_resize, crop_100_then_resize, none, closest_multiple_of_32, safe_resize_1152"
             )
 
         # 2. Corruption / Format Standardization
